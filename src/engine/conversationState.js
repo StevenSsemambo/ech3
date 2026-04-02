@@ -112,7 +112,7 @@ export const getTurnsInMode = () => _turnsInMode
 export const getPreviousMode = () => _modeHistory[_modeHistory.length - 1]?.mode || null
 
 export const inferMode = (parsed, history) => {
-  const { mood, intent, urgency } = parsed
+  const { mood, intent, urgency, isQuestion, complexity } = parsed
   const userTurns = history.filter(m => m.role === 'user').length
 
   if (urgency)                                              return MODES.crisis
@@ -120,7 +120,10 @@ export const inferMode = (parsed, history) => {
   if (userTurns <= 1)                                       return MODES.greeting
   if (['sadness','shame','fear'].includes(mood) &&
       intent === 'venting')                                 return MODES.listening
+  if (intent === 'seeking_advice' || isQuestion)            return MODES.exploring
   if (intent === 'reflecting' || mood === 'confusion')      return MODES.exploring
+  if (['sadness','fear','shame'].includes(mood))            return MODES.listening
+  if (intent === 'planning' || intent === 'questioning')    return MODES.exploring
   return MODES.reflecting
 }
 
