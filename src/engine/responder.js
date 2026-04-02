@@ -16,6 +16,7 @@ import {
 } from './echo_soul.js'
 import { processTurn, getFollowThrough, getArcGuidance, getTurnCount } from './conversation_engine.js'
 import { getStory } from './storyteller.js'
+import { buildFactualResponse } from './knowledge.js'
 
 // ── STORY ROTATION — Bug 4 Fix ────────────────────────────────────────────────
 // Tracks which story archetypes have been used this session so no story repeats
@@ -465,6 +466,18 @@ const selectQuestion = (parsed, memory, history) => {
 const directQuestionRouter = (parsed, memory, history) => {
   const lower = parsed.raw.toLowerCase().trim()
   const profile = memory?.profile || {}
+
+  // ── FACTUAL QUESTION ROUTING — must fire before all other checks ─────────────
+  // parser.js sets isFactualQuestion + factualDomain when user asks a real knowledge
+  // question ("what is X", "how does Y work", "explain Z", "tell me about W").
+  // We route to buildFactualResponse() which composes: fact → Echo's perspective →
+  // optional conversation starter. This prevents the emotional engine from answering
+  // "what is quantum entanglement" with a feelings reflection.
+  if (parsed.isFactualQuestion && parsed.factualDomain) {
+    const factualReply = buildFactualResponse(parsed.factualDomain, parsed.raw)
+    if (safeStr(factualReply)) return factualReply
+    // No match — fall through to the rest of the router
+  }
 
   // ── What can you remember / do you remember ─────────────────────────────────
   if (/do you remember|can you remember|what do you know about me|what have you learned|what do you know so far|tell me everything you know about me|what have you picked up|what have you noticed about me|what's in your memory|what have you stored/.test(lower)) {
