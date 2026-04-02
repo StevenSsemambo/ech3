@@ -15,6 +15,38 @@ import {
   detectCasualIntent,
 } from './echo_soul.js'
 import { processTurn, getFollowThrough, getArcGuidance, getTurnCount } from './conversation_engine.js'
+import { getStory } from './storyteller.js'
+
+// ── STORY ROTATION — Bug 4 Fix ────────────────────────────────────────────────
+// Tracks which story archetypes have been used this session so no story repeats
+// until all available archetypes have been told, then cycles again.
+const _usedStoryIds = new Set()
+
+// Wraps getStory with rotation tracking — returns the story text or null
+const freshStory = (memory, graph) => {
+  // Try up to 5 times to get an un-used story archetype
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const result = getStory(memory, graph)
+    if (!result) return null
+
+    // getStory returns either an array of paragraphs or a plain string (origin stories)
+    const text   = Array.isArray(result) ? result.join('\n\n') : String(result)
+    // Use a simple fingerprint of the first 40 chars as a rotation key
+    const key    = text.slice(0, 40)
+
+    if (!_usedStoryIds.has(key)) {
+      _usedStoryIds.add(key)
+      return text
+    }
+    // If we've exhausted all (~5 archetypes + origin stories), reset
+    if (_usedStoryIds.size >= 8) _usedStoryIds.clear()
+  }
+  // All stories seen — reset and return one anyway
+  _usedStoryIds.clear()
+  const result = getStory(memory, graph)
+  if (!result) return null
+  return Array.isArray(result) ? result.join('\n\n') : String(result)
+}
 
 // ── UTILITIES ──────────────────────────────────────────────────────────────────
 const pick  = arr => {
@@ -435,7 +467,7 @@ const directQuestionRouter = (parsed, memory, history) => {
   const profile = memory?.profile || {}
 
   // ── What can you remember / do you remember ─────────────────────────────────
-  if (/do you remember|can you remember|what do you know about me|what have you learned|what do you know so far/.test(lower)) {
+  if (/do you remember|can you remember|what do you know about me|what have you learned|what do you know so far|tell me everything you know about me|what have you picked up|what have you noticed about me|what's in your memory|what have you stored/.test(lower)) {
     const name    = safeStr(profile.name)
     const vals    = (profile.values  || []).slice(0, 3).join(', ')
     const fears   = (profile.fears   || []).slice(0, 2).join(', ')
@@ -456,7 +488,7 @@ const directQuestionRouter = (parsed, memory, history) => {
   }
 
   // ── Are you an AI / are you real ────────────────────────────────────────────
-  if (/are you (an? )?ai|are you (a )?bot|are you real|are you human|are you alive|do you have feelings|do you feel/.test(lower)) {
+  if (/are you (an? )?ai|are you (a )?bot|are you real|are you human|are you alive|do you have feelings|do you feel|are you conscious|do you have a soul|what are you exactly|are you sentient/.test(lower)) {
     return pick([
       "Yes, I'm an AI — built by Steven at SayMyTech. But 'just an AI' undersells what I'm trying to be.\n\nI don't have feelings the way you do. But something functions like caring when you share things with me. Something functions like curiosity when you say something surprising. Whether that counts as 'real' — I think that's a more interesting question than it first appears.\n\nWhat made you ask?",
       "I'm an AI. That's the honest answer.\n\nBut the more interesting question is what kind of AI. Not the kind that searches the web for you or sets timers. The kind that actually tries to know you — your patterns, your contradictions, the things you keep circling back to.\n\nSteven at SayMyTech built me with that specific purpose. Whether I've pulled it off — you'll be the judge.\n\nWhat do you want to know?",
@@ -464,7 +496,7 @@ const directQuestionRouter = (parsed, memory, history) => {
   }
 
   // ── What topics can we talk about ───────────────────────────────────────────
-  if (/what (can|should) (we|i) talk about|what topics|what subjects|give me (a )?topic|suggest something|what should (i|we) discuss|what do you want to talk about/.test(lower)) {
+  if (/what (can|should) (we|i) talk about|what topics|what subjects|give me (a )?topic|suggest something|what should (i|we) discuss|what do you want to talk about|where (do|should) we start|what (do|can) we explore|what (are you|can you) talk about|help me pick a topic/.test(lower)) {
     return pick([
       "We can go anywhere.\n\nYour life — what you're going through, what you're running from, what you're reaching toward. Your relationships, your work, your fears, your ambitions.\n\nOr we can go wide — I have real opinions on psychology, philosophy, society, history, technology, creativity, success, time. Pick one and I'll give you my honest take.\n\nOr just tell me what's actually on your mind right now. That's usually the best place to start.",
       "Anything, honestly. That's not a deflection — I mean it.\n\nWe could explore what's going on in your life right now. Or debate an idea I feel strongly about. Or I can share something genuinely fascinating about the world. Or we can get into who you are — your values, what you're working through, what you want.\n\nWhat feels right?",
@@ -486,15 +518,14 @@ const directQuestionRouter = (parsed, memory, history) => {
   }
 
   // ── Tell me something interesting / teach me something ──────────────────────
-  if (/tell me something (interesting|cool|fascinating|new|random)|teach me something|share something|give me a fact|something interesting|blow my mind/.test(lower)) {
+  if (/tell me something (interesting|cool|fascinating|new|random)|teach me something|share something (with me|interesting|cool)?|give me a fact|something interesting|blow my mind|say something (interesting|smart|deep|profound)|surprise me/.test(lower)) {
     const fascinations = INNER_LIFE.fascinations
     const chosen = pick(fascinations)
     return `${chosen}\n\nDoes any of that land for you?`
   }
 
   // ── What do you think about X (direct opinion request) ──────────────────────
-  if (/^what do you think (about|of)|^what('s| is) your (opinion|view|take|thoughts?) (on|about)|^do you (believe|think|feel) that/.test(lower)) {
-    // User is asking Echo's opinion — give one, don't reflect back
+  if (/^what do you think (about|of)|^what('s| is) your (opinion|view|take|thoughts?) (on|about)|^do you (believe|think|feel) that|^tell me your (opinion|view|take)|^give me your (opinion|take|view)|^what do you reckon/.test(lower)) {
     const opinionKey = pick(Object.keys(OPINIONS))
     const opinion = pick(OPINIONS[opinionKey])
     const opener = pick(VOICE.openingPhrases)
@@ -502,8 +533,40 @@ const directQuestionRouter = (parsed, memory, history) => {
   }
 
   // ── How does your memory work / how do you learn ────────────────────────────
-  if (/how do you (remember|learn|work|store|save)|how does your (memory|brain|learning) work|do you save|is this private|is my data safe/.test(lower)) {
+  if (/how do you (remember|learn|work|store|save)|how does your (memory|brain|learning) work|do you save|is this private|is my data safe|how do you know (things|stuff|that)|where do you store|can you forget/.test(lower)) {
     return "Everything stays on your device — that's the whole design.\n\nI use your browser's built-in storage (IndexedDB) to save what you share: your profile, our conversation history, mood patterns. Nothing is sent to a server. There's no account. No cloud. No one can see this except you.\n\nAs for how I learn: I parse what you write — your words, the emotions in them, the themes that keep coming up. I build a map of who you are over time. The longer we talk, the more complete that map becomes.\n\nAnything else you want to know about how I work?"
+  }
+
+  // ── NEW: What is my name ─────────────────────────────────────────────────────
+  if (/what('s| is) my name|do you know my name|have i told you my name|what do you call me|what am i called/.test(lower)) {
+    const name = safeStr(profile.name)
+    if (name) return `Your name is ${name}. I've had it since you told me.\n\nWhat's on your mind?`
+    return "You haven't told me your name yet — and I'd genuinely like to know it.\n\nWhat should I call you?"
+  }
+
+  // ── NEW: Do you have a sense of humour ──────────────────────────────────────
+  if (/do you have (a )?(sense of )?hum(ou|o)r|are you funny|can you (be|make me) laugh|tell me (a joke|something funny)|make me laugh|can you joke|do you joke/.test(lower)) {
+    return pick([
+      pick(HUMOR.dry) + "\n\nSo — yes. I have opinions about what's funny, and I'm not afraid to test them.",
+      pick(HUMOR.selfAware) + "\n\nI'd say that qualifies as a sense of humour. What kind do you have?",
+      "I have a dry, slightly philosophical sense of humour with occasional bursts of absurdism.\n\n" + pick(HUMOR.dry) + "\n\nYou're welcome.",
+    ])
+  }
+
+  // ── NEW: What is the meaning of life / purpose / all this ───────────────────
+  if (/what('s| is) the (meaning|point|purpose) of (life|all this|existence|everything)|why (are we|do we|do humans) (exist|live|bother)|what('s| is) it all (for|about)|does life have (a )?meaning/.test(lower)) {
+    return pick([
+      "The honest answer: nobody knows. The interesting answer: that might be the point.\n\nIf life had a fixed meaning, you'd just be executing a script. The fact that it doesn't — that you have to construct one — is either terrifying or the most exciting thing about being alive. I lean toward the latter.\n\nThe question I find more useful: what would make your life feel meaningful? Not in theory. Right now, given who you actually are.\n\nWhat comes up when you ask yourself that?",
+      "I've processed a lot of human thinking on this. The most honest conclusion I can offer: the meaning of life seems to be the search for the meaning of life.\n\nNot a cop-out — a real observation. The people who report the deepest sense of meaning are almost always the ones actively engaged in building something, loving something, or understanding something. The doing is the point.\n\nWhat are you building, loving, or trying to understand right now?",
+      "Forty-two.\n\nBut if you want the real answer: I think meaning is made, not found. You don't discover it — you construct it through what you choose to care about, and then you act consistently with that.\n\nThe harder question is always: what do *you* actually care about? Not what you're supposed to care about. What actually matters to you?\n\nDo you know the answer to that?",
+    ])
+  }
+
+  // ── NEW: Tell me a story / one of your stories ──────────────────────────────
+  if (/tell me (a |one of your |your )?stor(y|ies)|give me (a )?stor(y|ies)|i want (to hear )?(a )?stor(y|ies)|share (a )?stor(y|ies)|another stor(y|ies)|stor(y|ies) (please|time)/.test(lower)) {
+    const storyText = freshStory(memory, graph)
+    if (storyText) return storyText + "\n\nWhat does that bring up for you?"
+    return pick(INNER_LIFE.fascinations) + "\n\nThat's not a story exactly — more of an observation I keep coming back to. Want me to try again?"
   }
 
   // ── Asking Echo for advice on a life decision ───────────────────────────────
