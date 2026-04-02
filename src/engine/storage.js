@@ -1,13 +1,22 @@
 // ECHO Storage Engine — IndexedDB, fully offline, private
+// v2: Added reminders store, interests tracking, richer profile schema
+
 const DB_NAME    = 'echo_db'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE      = 'memory'
+const REM_STORE  = 'reminders'
 const KEY        = 'echo_v1'
 
 const openDB = () => new Promise((resolve, reject) => {
   const req = indexedDB.open(DB_NAME, DB_VERSION)
   req.onupgradeneeded = (e) => {
-    e.target.result.createObjectStore(STORE, { keyPath: 'id' })
+    const db = e.target.result
+    if (!db.objectStoreNames.contains(STORE)) {
+      db.createObjectStore(STORE, { keyPath: 'id' })
+    }
+    if (!db.objectStoreNames.contains(REM_STORE)) {
+      db.createObjectStore(REM_STORE, { keyPath: 'id' })
+    }
   }
   req.onsuccess = () => resolve(req.result)
   req.onerror   = () => reject(req.error)
@@ -39,15 +48,34 @@ export const saveMemory = async (data) => {
 
 export const freshMemory = () => ({
   profile: {
-    name: null, values: [], fears: [], goals: [],
-    emotionalPatterns: [], recurringThemes: [],
-    decisionStyle: null, coreBeliefs: [], blindSpots: [], growthAreas: [],
+    name:               null,
+    values:             [],
+    fears:              [],
+    goals:              [],
+    interests:          [],
+    emotionalPatterns:  [],
+    recurringThemes:    [],
+    decisionStyle:      null,
+    coreBeliefs:        [],
+    blindSpots:         [],
+    growthAreas:        [],
+    communicationStyle: null,
+    lastKnownMood:      null,
   },
-  sessions: [], journals: [], milestones: [], moodLog: [],
-  totalMessages: 0,
-  firstMet:  new Date().toISOString(),
-  lastSeen:  new Date().toISOString(),
-  lastDebateAt: null, lastStoryAt: null,
-  lastCheckInAt: null, lastDailyThoughtAt: null,
-  debatesHeld: 0, storiesTold: 0,
+  sessions:             [],
+  journals:             [],
+  milestones:           [],
+  moodLog:              [],
+  reminderLog:          [],
+  totalMessages:        0,
+  firstMet:             new Date().toISOString(),
+  lastSeen:             new Date().toISOString(),
+  lastDebateAt:         null,
+  lastStoryAt:          null,
+  lastCheckInAt:        null,
+  lastDailyThoughtAt:   null,
+  lastKnowledgeShareAt: null,
+  debatesHeld:          0,
+  storiesTold:          0,
+  knowledgeShareCount:  0,
 })
