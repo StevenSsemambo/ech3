@@ -26,6 +26,10 @@ import { constructResponse, wiserSelf, reasonPatterns } from './responder.js'
 import { parseInput } from './parser.js'
 import { buildKnowledgeGraph } from './graph.js'
 import { metacognize } from './metacognition.js'
+import {
+  shouldUseName, markNameUsed, injectName,
+  shouldAttemptRecall, markRecallUsed,
+} from './conversationState.js'
 
 // ── UTILITIES ──────────────────────────────────────────────────────────────────
 const pick    = arr => arr?.length ? arr[Math.floor(Math.random() * arr.length)] : ''
@@ -440,10 +444,17 @@ export async function processWithBrain(userText, history, memory, isWiser = fals
     if (urgency) return null
 
     // Direct questions about Echo / beliefs / experiences
+    // isAboutEcho flag from parser catches phrasings the regex patterns might miss
     const direct = directQuestion(userText, memory)
-    if (direct) {
-      echoMemory.indexExchange(userText, direct, memory?.profile)
-      return direct
+    if (direct || parsed.isAboutEcho) {
+      const response = direct || null
+      if (response) {
+        echoMemory.indexExchange(userText, response, memory?.profile)
+        return response
+      }
+      // isAboutEcho but no direct match — fall through to constructResponse
+      // which will hit directQuestionRouter
+      return null
     }
 
     // Very short / casual (≤3 words, no emotional charge) — phrase engine handles
@@ -474,10 +485,13 @@ export async function processWithBrain(userText, history, memory, isWiser = fals
       if (r) parts.push(r)
     }
 
-    // 4. Context thread (after turn 2)
-    if (userTurns > 2 && coin(0.35)) {
-      const t = contextThread(userText, memory)
-      if (t) parts.push(t)
+    // 4. Context thread — activated now that profile is reliable (echoMemory fix)
+    if (userTurns > 2 && shouldAttemptRecall(userTurns)) {
+      const t = echoMemory.recallAsThread(userText)
+      if (t) {
+        parts.push(t)
+        markRecallUsed(userTurns)
+      }
     }
 
     // 5. Echo volunteers an experience
@@ -501,8 +515,17 @@ export async function processWithBrain(userText, history, memory, isWiser = fals
     // Nothing useful — let constructResponse handle
     if (!result || result.length < 20) return null
 
-    echoMemory.indexExchange(userText, result, memory?.profile)
-    return result
+    // ── Name injection — use name naturally, not on every message ─────────────
+    let final = result
+    const profile = memory?.profile || {}
+    if (shouldUseName(profile, userTurns)) {
+      const nameStyle = parts.length > 2 ? 'address' : 'prefix'
+      final = injectName(result, profile.name, nameStyle)
+      markNameUsed(userTurns)
+    }
+
+    echoMemory.indexExchange(userText, final, memory?.profile)
+    return final
 
   } catch (err) {
     console.warn('[ECHO brain] Error:', err.message)
