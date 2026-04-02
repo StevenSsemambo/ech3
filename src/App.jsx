@@ -6,9 +6,20 @@ import { parseInput } from './engine/parser.js'
 import { buildKnowledgeGraph } from './engine/graph.js'
 import { metacognize, extractProfileUpdate } from './engine/metacognition.js'
 import { reasonPatterns, constructResponse, wiserSelf, getVolunteerMessage } from './engine/responder.js'
-import { inferBeliefs, buildLanguageProfile, getCircadianState, circadianGreeting, getEchoEmotionalState, getProactiveMemory } from './engine/belief.js'
+import { inferBeliefs, buildLanguageProfile, getCircadianState, circadianGreeting, getEchoEmotionalState, getProactiveMemory, detectInterests, enrichProfileFromHistory } from './engine/belief.js'
 import { initVoice, speak, stopSpeaking, setVoiceCallbacks, initRecognition, startListening, stopListening, initAmbient, resumeAudio } from './engine/voice.js'
 import { lifeEngine } from './engine/lifeEngine.js'
+import {
+  isReminderRequest, parseReminderTime, parseReminderContent,
+  createReminder, initReminders, deleteReminder,
+  buildReminderConfirmation, buildReminderSpeech,
+  scheduleReminder,
+} from './engine/reminder.js'
+import {
+  startWakeWordListener, suspendWakeWord, resumeWakeWord,
+  stopWakeWordListener, isWakeWordSupported, getWakeResponse,
+} from './engine/wakeWord.js'
+import { resetSession } from './engine/conversationState.js'
 
 const { serif, sans } = FONTS
 const pick    = a => a?.[Math.floor(Math.random() * a.length)] || ''
@@ -97,11 +108,15 @@ function BeliefCard({ belief }) {
 // Autonomous message type badge
 function AutoBadge({ type }) {
   const labels = {
-    debate:        { text:'ECHO IS DEBATING', color:'#c48282' },
-    story:         { text:'ECHO TELLS A STORY', color:'#a882c4' },
-    daily_thought: { text:'ECHO HAS BEEN THINKING', color:'#c4a882' },
-    volunteer:     { text:'ECHO SPEAKS FIRST', color:'#82a8c4' },
-    checkIn:       { text:'ECHO CHECKS IN', color:'#82c4a8' },
+    debate:        { text:'ECHO IS DEBATING',        color:'#c48282' },
+    story:         { text:'ECHO TELLS A STORY',      color:'#a882c4' },
+    daily_thought: { text:'ECHO HAS BEEN THINKING',  color:'#c4a882' },
+    volunteer:     { text:'ECHO SPEAKS FIRST',       color:'#82a8c4' },
+    checkIn:       { text:'ECHO CHECKS IN',          color:'#82c4a8' },
+    knowledge:     { text:'ECHO SHARES SOMETHING',   color:'#82c4b8' },
+    reminder:      { text:'REMINDER',                color:'#c4b082' },
+    reminder_set:  { text:'REMINDER SET',            color:'#82c4a8' },
+    wake:          { text:'ECHO HEARD YOU',          color:'#c482b8' },
   }
   const label = labels[type]
   if (!label) return null
@@ -157,6 +172,9 @@ export default function App() {
   const [autoMsgType, setAutoMsgType]   = useState(null)
   const [tick, setTick]                 = useState(0)
   const [latestIdx, setLatestIdx]       = useState(-1)
+  const [pendingReminders, setPendingReminders] = useState([])
+  const [reminderAlert, setReminderAlert]       = useState(null)
+  const [wakeWordOn, setWakeWordOn]             = useState(false)
 
   const chatBot  = useRef(null)
   const wiserBot = useRef(null)
@@ -197,6 +215,72 @@ export default function App() {
     }
   }, [booting])
 
+  // ── REMINDER BOOT ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (booting) return
+    initReminders(async (reminder) => {
+      // Reminder fired — speak it and show alert
+      const speech = buildReminderSpeech(reminder.content, memRef.current?.profile)
+      setReminderAlert({ text: speech, reminder })
+      await initVS()
+      await echoSpeak(speech, { rate: 0.76 })
+      // Add to chat
+      const msg = { role: 'assistant', content: speech, ts: new Date(), fresh: true, type: 'reminder' }
+      setChatMsgs(prev => { setLatestIdx(prev.length); return [...prev, msg] })
+      // Clean up from DB
+      await deleteReminder(reminder.id)
+      setPendingReminders(prev => prev.filter(r => r.id !== reminder.id))
+      setTimeout(() => setReminderAlert(null), 8000)
+    }).then(active => {
+      setPendingReminders(active)
+    })
+  }, [booting])
+
+  // ── WAKE WORD BOOT ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (booting || !isWakeWordSupported()) return
+    // Start after a short delay to let everything settle
+    const t = setTimeout(() => {
+      const started = startWakeWordListener({
+        onWake: async (rawTranscript) => {
+          // Wake word heard — activate Echo
+          await initVS()
+          const response = getWakeResponse(memRef.current?.profile)
+          setWakeWordOn(true)
+          // Switch to chat if not already there
+          setScreen(s => {
+            if (s === 'splash' || s === 'home') return 'chat'
+            return s
+          })
+          const msg = { role: 'assistant', content: response, ts: new Date(), fresh: true, type: 'wake' }
+          setChatMsgs(prev => { setLatestIdx(prev.length); return [...prev, msg] })
+          suspendWakeWord()  // suspend while we're talking
+          await echoSpeak(response, { rate: 0.78 })
+          // Start listening for their reply automatically
+          setListening(true)
+          startListening({
+            onInterim: t => setTranscript(t),
+            onFinal:   t => {
+              setTranscript(t)
+              setListening(false)
+              resumeWakeWord()  // resume background listening after reply
+              if (t.trim()) send(t)
+            },
+            onEnd:   () => { setListening(false); resumeWakeWord() },
+            onError: () => { setListening(false); resumeWakeWord() },
+          })
+        },
+        onListenStart: () => {},
+        onListenEnd:   () => {},
+      })
+      if (started) setWakeWordOn(true)
+    }, 3000)
+    return () => {
+      clearTimeout(t)
+      stopWakeWordListener()
+    }
+  }, [booting])
+
   useEffect(() => { chatBot.current?.scrollIntoView({behavior:'smooth'}) }, [chatMsgs, thinking])
   useEffect(() => { wiserBot.current?.scrollIntoView({behavior:'smooth'}) }, [wiserMsgs, thinking])
 
@@ -234,19 +318,24 @@ export default function App() {
     const meta    = metacognize(m, graph)
     const pats    = reasonPatterns(m, graph)
     const updated = extractProfileUpdate(parsed, m.profile)
+
+    // Enrich profile with interests + communication style from full history
+    const enriched = enrichProfileFromHistory(history, updated)
+
     const newML   = [...(m.moodLog||[]), {date:new Date().toISOString(), mood:parsed.mood}].slice(-60)
     const langProfile = buildLanguageProfile(history)
-    const newBeliefs  = inferBeliefs(history, updated)
-    persist({ profile:updated, moodLog:newML, totalMessages:(m.totalMessages||0)+2, lastSeen:new Date().toISOString() })
+    const newBeliefs  = inferBeliefs(history, enriched)
+    persist({ profile: enriched, moodLog:newML, totalMessages:(m.totalMessages||0)+2, lastSeen:new Date().toISOString() })
     setPatterns(pats); setBeliefs(newBeliefs)
     if (parsed.mood !== 'neutral') setMood(parsed.mood)
     return isWiser
-      ? wiserSelf(parsed, {...m, profile:updated}, graph, pats, meta.canBeWiser)
-      : constructResponse(parsed, {...m, profile:updated}, graph, history, langProfile)
+      ? wiserSelf(parsed, {...m, profile: enriched}, graph, pats, meta.canBeWiser)
+      : constructResponse(parsed, {...m, profile: enriched}, graph, history, langProfile)
   }, [])
 
   // ── BOOT CHAT ─────────────────────────────────────────────────────────────
   const bootChat = () => {
+    resetSession()  // clear phrase memory for new session
     const m       = memRef.current
     const gap     = daysSince(m.lastSeen)
     const isFirst = (m.totalMessages||0) === 0
@@ -324,6 +413,37 @@ export default function App() {
     clearTimeout(idleRef.current); clearTimeout(autoRef.current); clearTimeout(volRef.current)
     setAutoMsg(null); stopSpeaking()
 
+    // ── REMINDER DETECTION ─────────────────────────────────────────────────
+    if (isReminderRequest(t) && !isWiser) {
+      const fireAt  = parseReminderTime(t)
+      const content = parseReminderContent(t)
+      if (fireAt && content) {
+        const userMsg = { role: 'user', content: t, ts: new Date() }
+        setChatMsgs(prev => [...prev, userMsg])
+        setInput('')
+
+        const reminder     = await createReminder(content, fireAt, memRef.current?.profile)
+        const confirmation = buildReminderConfirmation(content, fireAt, memRef.current?.profile)
+        scheduleReminder(reminder, async (rem) => {
+          const speech = buildReminderSpeech(rem.content, memRef.current?.profile)
+          setReminderAlert({ text: speech, reminder: rem })
+          const msg = { role: 'assistant', content: speech, ts: new Date(), fresh: true, type: 'reminder' }
+          setChatMsgs(prev => { setLatestIdx(prev.length); return [...prev, msg] })
+          await echoSpeak(speech, { rate: 0.76 })
+          await deleteReminder(rem.id)
+          setPendingReminders(prev => prev.filter(r => r.id !== rem.id))
+          setTimeout(() => setReminderAlert(null), 8000)
+        })
+        setPendingReminders(prev => [...prev, reminder])
+
+        const confirmMsg = { role: 'assistant', content: confirmation, ts: new Date(), fresh: true, type: 'reminder_set' }
+        setChatMsgs(prev => { setLatestIdx(prev.length); return [...prev, confirmMsg] })
+        await echoSpeak(confirmation, { rate: 0.76 })
+        resetIdle()
+        return
+      }
+    }
+
     const userMsg = { role:'user', content:t, ts:new Date() }
     const setter  = isWiser ? setWiserMsgs : setChatMsgs
     const current = isWiser ? wiserMsgs    : chatMsgs
@@ -354,16 +474,17 @@ export default function App() {
   // ── MIC ───────────────────────────────────────────────────────────────────
   const handleMic = useCallback(async () => {
     await initVS(); stopSpeaking()
-    if (listening) { stopListening(); setListening(false); return }
+    if (listening) { stopListening(); setListening(false); resumeWakeWord(); return }
     if (!micReady) { inputRef.current?.focus(); return }
+    suspendWakeWord()  // pause background listener while user speaks
     setListening(true); setTranscript('')
     const ok = startListening({
       onInterim: t => setTranscript(t),
-      onFinal:   t => { setTranscript(t); setListening(false); if (t.trim()) send(t, screen==='wiser') },
-      onEnd:     () => setListening(false),
-      onError:   () => { setListening(false); inputRef.current?.focus() },
+      onFinal:   t => { setTranscript(t); setListening(false); resumeWakeWord(); if (t.trim()) send(t, screen==='wiser') },
+      onEnd:     () => { setListening(false); resumeWakeWord() },
+      onError:   () => { setListening(false); resumeWakeWord(); inputRef.current?.focus() },
     })
-    if (!ok) { setListening(false); inputRef.current?.focus() }
+    if (!ok) { setListening(false); resumeWakeWord(); inputRef.current?.focus() }
   }, [listening, micReady, screen, send, initVS])
 
   // ── WISER ─────────────────────────────────────────────────────────────────
@@ -446,10 +567,25 @@ export default function App() {
     </div>
   )
 
+  // ── REMINDER ALERT OVERLAY (shows on any screen) ──────────────────────────
+  const ReminderAlert = () => {
+    if (!reminderAlert) return null
+    return (
+      <div style={{ position:'fixed',top:0,left:0,right:0,zIndex:999,padding:'env(safe-area-inset-top,16px) 16px 0' }}>
+        <div style={{ background:`${palette.bg}f4`,border:`1px solid ${palette.accent}44`,borderRadius:20,padding:'16px 20px',backdropFilter:'blur(24px)',animation:'ecSlideUp 0.4s ease forwards',boxShadow:`0 8px 32px rgba(0,0,0,0.4)` }}>
+          <div style={{ fontSize:8,color:palette.accent,letterSpacing:'0.16em',marginBottom:8,fontFamily:sans,opacity:0.6 }}>⏰ REMINDER</div>
+          <div style={{ fontSize:15,color:palette.text,lineHeight:1.7,fontFamily:serif,fontStyle:'italic' }}>{reminderAlert.text}</div>
+          <button onClick={()=>setReminderAlert(null)} style={{ marginTop:12,background:'transparent',border:`1px solid ${palette.accent}28`,borderRadius:16,padding:'6px 16px',color:palette.accent,fontSize:9,letterSpacing:'0.1em',cursor:'pointer',fontFamily:sans }}>DISMISS</button>
+        </div>
+      </div>
+    )
+  }
+
   // ── SPLASH ────────────────────────────────────────────────────────────────
   if (screen === 'splash' || booting) return (
     <div onClick={initVS} style={{ minHeight:'100svh',background:'#0c0905',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:serif,overflow:'hidden',cursor:'pointer',userSelect:'none' }}>
       <G/><DriftingParticles mood="neutral" tick={tick}/>
+      <ReminderAlert />
       <div style={{ position:'fixed',inset:0,background:'radial-gradient(ellipse 90% 70% at 50% 45%,rgba(196,168,130,0.09) 0%,transparent 65%)',pointerEvents:'none' }} />
       <div style={{ position:'relative',zIndex:2,display:'flex',flexDirection:'column',alignItems:'center',gap:32 }}>
         <div style={{ animation:'ecPopIn 1.2s cubic-bezier(0.34,1.56,0.64,1) forwards',opacity:0 }}>
@@ -471,11 +607,15 @@ export default function App() {
   if (screen === 'home') return (
     <div onClick={initVS} style={{ minHeight:'100svh',display:'flex',flexDirection:'column',fontFamily:serif,overflow:'hidden',userSelect:'none' }}>
       <G/><LivingBG mood={mood} tick={tick}/><MemoryWhispers memory={mem} mood={mood}/>
+      <ReminderAlert />
       <div style={{ position:'relative',zIndex:10,paddingTop:'env(safe-area-inset-top,0px)' }}>
         <div style={{ padding:'14px 18px 0',display:'flex',justifyContent:'space-between',alignItems:'center' }}>
           <div>
             <div style={{ fontSize:8,color:palette.accent,opacity:0.46,letterSpacing:'0.16em',fontFamily:sans }}>{mem?.sessions?.length||0} SESSIONS · {daysSince(mem?.firstMet)} DAYS · {circadian.period.toUpperCase()}</div>
-            <div style={{ fontSize:7,color:palette.accent,opacity:0.2,letterSpacing:'0.1em',marginTop:2,fontFamily:sans }}>PRIVATE · OFFLINE · YOURS</div>
+            <div style={{ fontSize:7,color:palette.accent,opacity:0.2,letterSpacing:'0.1em',marginTop:2,fontFamily:sans }}>
+              PRIVATE · OFFLINE · YOURS{wakeWordOn ? ' · LISTENING FOR "ECHO"' : ''}
+              {pendingReminders.length > 0 ? ` · ${pendingReminders.length} REMINDER${pendingReminders.length > 1 ? 'S' : ''} SET` : ''}
+            </div>
           </div>
           <button onClick={e=>{e.stopPropagation();setNavOpen(true)}} style={{ background:`${palette.accent}10`,border:`1px solid ${palette.accent}28`,borderRadius:22,padding:'9px 17px',color:palette.accent,fontSize:9,letterSpacing:'0.12em',cursor:'pointer',fontFamily:sans,minHeight:38 }}>MENU</button>
         </div>
@@ -536,7 +676,7 @@ export default function App() {
               ))}
             </div>
             <div style={{ padding:'14px 24px',borderTop:`1px solid ${palette.accent}14`,paddingBottom:'env(safe-area-inset-bottom,16px)' }}>
-              <div style={{ fontSize:8,color:`${palette.accent}38`,lineHeight:2,fontFamily:sans }}>ECHO ENGINE v3.0<br/>Stories · Debates · Deep Memory<br/>No external AI · All yours</div>
+              <div style={{ fontSize:8,color:`${palette.accent}38`,lineHeight:2,fontFamily:sans }}>ECHO ENGINE v4.0<br/>Reminders · Wake Word · Knowledge<br/>No external AI · All yours</div>
             </div>
           </div>
         </div>
@@ -553,6 +693,7 @@ export default function App() {
     return (
       <div onClick={initVS} style={{ minHeight:'100svh',height:'100svh',display:'flex',flexDirection:'column',fontFamily:serif,overflow:'hidden' }}>
         <G/><LivingBG mood={mood} tick={tick}/><MemoryWhispers memory={mem} mood={mood}/>
+        <ReminderAlert />
 
         <Header
           title={isWiser ? 'YOUR WISER SELF' : 'ECHO'}
