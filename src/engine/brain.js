@@ -23,6 +23,7 @@ import {
 import { echoLife } from './echoLife.js'
 import { echoMemory } from './echoMemory.js'
 import { constructResponse, wiserSelf, reasonPatterns } from './responder.js'
+import { buildFactualResponse } from './knowledge.js'
 import { parseInput } from './parser.js'
 import { buildKnowledgeGraph } from './graph.js'
 import { metacognize } from './metacognition.js'
@@ -38,13 +39,16 @@ const coin    = (p = 0.5) => Math.random() < p
 const join    = parts => parts.filter(p => safeStr(p)).join('\n\n').trim()
 const firstN  = (str, n) => str.split(' ').slice(0, n).join(' ')
 
+// _used tracks strings already surfaced this session to prevent exact repetition.
+// Capped at 80 — when full, the whole set resets (not just one entry) so the pool
+// opens back up cleanly rather than leaking one slot at a time.
 const _used = new Set()
-const fresh = (arr, fallback = '') => {
+const fresh = (arr, fallback = '', source = '') => {
   if (!arr?.length) return fallback
   const pool = arr.filter(s => !_used.has(s))
   const chosen = (pool.length ? pool : arr)[Math.floor(Math.random() * (pool.length || arr.length))]
   _used.add(chosen)
-  if (_used.size > 60) { const it = _used.values(); _used.delete(it.next().value) }
+  if (_used.size > 80) _used.clear()   // full reset — re-opens the whole pool cleanly
   return chosen
 }
 
@@ -442,6 +446,19 @@ export async function processWithBrain(userText, history, memory, isWiser = fals
 
     // Crisis — phrase engine handles with sensitivity pool
     if (urgency) return null
+
+    // ── FACTUAL QUESTION PASSTHROUGH ──────────────────────────────────────────
+    // If parser flagged this as a real knowledge question (isFactualQuestion),
+    // route directly to buildFactualResponse and bypass the emotional engine.
+    // This stops Echo giving a feelings-based response to "what is quantum entanglement".
+    if (parsed.isFactualQuestion && parsed.factualDomain) {
+      const factualReply = buildFactualResponse(parsed.factualDomain, userText)
+      if (factualReply) {
+        echoMemory.indexExchange(userText, factualReply, memory?.profile)
+        return factualReply
+      }
+      // buildFactualResponse returned null (no domain match) — fall through
+    }
 
     // Direct questions about Echo / beliefs / experiences
     // isAboutEcho flag from parser catches phrasings the regex patterns might miss
