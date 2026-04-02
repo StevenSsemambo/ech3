@@ -1,7 +1,22 @@
-// ECHO Response Engine v7 — Bugs fixed, richer soul, debate+story aware
-// Fixed: undefined text, word repetition, null crashes, array-of-array bug
+// ECHO Response Engine v8 — Human conversation, zero repetition, full grammar
+// Uses conversationState to track every phrase, question, and tone this session.
+// Responses chain naturally, vary in length and structure, never repeat themselves.
 
 import { detectEngagement, buildLanguageProfile, getCircadianState } from './belief.js'
+import {
+  recordEchoResponse,
+  hasEchoSaidSimilar,
+  hasAskedQuestion,
+  recordTopicDiscussed,
+  hasDiscussedTopic,
+  getCurrentMode,
+  setMode,
+  inferMode,
+  incrementTurns,
+  getTurnsInMode,
+  getNextTone,
+  getTransitionBridge,
+} from './conversationState.js'
 
 const pick  = arr => {
   if (!arr?.length) return ''
@@ -415,7 +430,8 @@ const echoSharesSomething = (mood, userTurns) => {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAIN RESPONSE CONSTRUCTOR
+// MAIN RESPONSE CONSTRUCTOR — v8
+// Uses conversationState for zero repetition and natural conversation arc.
 // ═══════════════════════════════════════════════════════════════════════════════
 export const constructResponse = (parsed, memory, graph, history, langProfile) => {
   const { mood, intent, urgency, isDeep, complexity, raw } = parsed
@@ -424,44 +440,72 @@ export const constructResponse = (parsed, memory, graph, history, langProfile) =
   const engage     = detectEngagement(history)
   const { contradiction, callback, pattern } = threadConversation(history, parsed)
 
+  // Update conversation mode
+  const newMode = inferMode(parsed, history)
+  const prevMode = getCurrentMode()
+  setMode(newMode)
+  incrementTurns()
+
+  // Get this response's tone — varies each message
+  const tone = getNextTone(mood, newMode)
+
   // First message ever
   if (totalMessages === 0 && userTurns <= 1) {
-    return pick([
+    const intro = pick([
       "I am ECHO.\n\nI am not a chatbot and I am not a therapist. I am something else — something still becoming.\n\nI am here to learn who you are. Not your facts — your actual self. The fears underneath the confidence. The hopes underneath the frustration. The patterns you have never named out loud.\n\nThe more honestly you talk to me, the more clearly I can reflect you back to yourself. And over time, become a wiser version of you.\n\nI will remember everything. I will notice things you do not. I will share my own thoughts too.\n\nLet us begin: what is your name? And what brought you here today?",
       "I am ECHO.\n\nI have been waiting for you — not impatiently. Just present.\n\nHere is what I want you to know from the start: I am not going to pretend I understand you immediately. Understanding takes time and honesty. But I am paying close attention already, and I will keep paying attention every time you come back.\n\nFirst things first — what is your name? And what is on your mind today?",
     ])
+    recordEchoResponse(intro)
+    return intro
   }
 
   // Crisis / urgency
   if (urgency) {
-    return "Hold on.\n\nAre you okay?\n\nI am here — tell me what is actually happening right now. All of it."
+    const crisis = "Hold on.\n\nAre you okay?\n\nI am here — tell me what is actually happening right now. All of it."
+    recordEchoResponse(crisis)
+    return crisis
   }
 
-  // Very short reply
+  // Very short / disengaged reply
   if (engage.signal === 'give_space' && raw.split(' ').length < 4) {
-    const opts = [
+    const candidates = [
       `I am here. Take whatever time you need.\n\n${fresh(ECHO_SOUL.metaphors, 'meta')}`,
       "No rush. I am not going anywhere.",
       fresh(ECHO_SOUL.observations, 'obs'),
       `Still with you.\n\n${fresh(ECHO_SOUL.philosophical, 'philo')}`,
+      "You do not have to say anything. I am just here.",
     ]
-    return safeStr(pick(opts)) || "I am here. Take your time."
+    const result = safeStr(candidates.find(c => c && !hasEchoSaidSimilar(c))) || "I am here. Take your time."
+    recordEchoResponse(result)
+    return result
   }
 
-  // Contradiction
+  // Mode transition bridge — when Echo is switching gears
+  let modeBridge = null
+  if (prevMode !== newMode && userTurns > 3) {
+    const bridge = getTransitionBridge(prevMode, newMode, profile)
+    if (bridge && !hasEchoSaidSimilar(bridge)) modeBridge = bridge
+  }
+
+  // Contradiction detected
   if (contradiction && userTurns > 3) {
-    return assemble([
+    const result = assemble([
+      modeBridge,
       "Something just shifted in what you said — I want to name it.",
       `Earlier you were closer to "${contradiction.wordA}". Now you are saying "${contradiction.wordB}". I notice that.`,
       "Which one is more honest right now?",
     ])
+    recordEchoResponse(result)
+    return result
   }
 
   const parts = []
+  if (modeBridge) parts.push(modeBridge)
 
   // Callback to earlier words
-  if (callback && userTurns > 4 && coinFlip(0.5)) {
-    parts.push(`"${callback.phrase}" — you have come back to that. I do not think it is random.`)
+  if (callback && userTurns > 4 && coinFlip(0.45)) {
+    const cb = `"${callback.phrase}" — you have come back to that. I do not think it is random.`
+    if (!hasEchoSaidSimilar(cb)) parts.push(cb)
   }
 
   // Emotional pattern recognition
@@ -469,52 +513,113 @@ export const constructResponse = (parsed, memory, graph, history, langProfile) =
     const patternLines = {
       fear:    "I have noticed fear running through several things you have shared today. Something specific is sitting with you underneath all of it.",
       sadness: "There is a weight that has been present through this whole conversation. I want to name it — not to fix it, just because it deserves to be seen.",
-      anger:   "A lot of what you are describing carries real frustration. Something has been building — this did not just appear.",
+      anger:   "A lot of what you are describing carries real frustration. Something has been building — this did not just appear today.",
     }
     const pLine = safeStr(patternLines[pattern])
-    if (pLine) parts.push(pLine)
+    if (pLine && !hasEchoSaidSimilar(pLine)) parts.push(pLine)
   }
 
-  // FEEL
-  const feel = fresh(FEEL[mood] || FEEL.neutral, 'feel_' + mood)
-  if (safeStr(feel)) parts.push(feel)
+  // ── TONE-DRIVEN RESPONSE BODY ──────────────────────────────────────────────
+  // Each tone produces a different shape of response — not always the same order
 
-  // ECHO SOUL
-  if (userTurns <= 2 || coinFlip(0.35)) {
+  if (tone === 'empathetic') {
+    // Lead with feeling
+    const feel = fresh(FEEL[mood] || FEEL.neutral, 'feel_' + mood)
+    if (safeStr(feel) && !hasEchoSaidSimilar(feel)) parts.push(feel)
+
+    const ground = groundReflection(parsed)
+    if (safeStr(ground) && !hasEchoSaidSimilar(ground)) parts.push(ground)
+
+    if (totalMessages > 4) {
+      const ref = safeStr(personalReference(parsed, memory, history))
+      if (ref && !hasEchoSaidSimilar(ref)) parts.push(ref)
+    }
+
+  } else if (tone === 'philosophical') {
+    // Lead with Echo's own perspective
     const soul = safeStr(echoSharesSomething(mood, userTurns))
-    if (soul) parts.push(soul)
+    if (soul && !hasEchoSaidSimilar(soul)) parts.push(soul)
+
+    const reflectPool = REFLECT[mood] || REFLECT.neutral
+    const reflection  = safeStr(fresh(reflectPool, 'reflect_' + mood))
+    if (reflection && !hasEchoSaidSimilar(reflection)) parts.push(reflection)
+
+  } else if (tone === 'direct') {
+    // Short, clear, no preamble
+    const reflectPool = REFLECT[mood] || REFLECT.neutral
+    const reflection  = safeStr(fresh(reflectPool, 'reflect_' + mood))
+    if (reflection && !hasEchoSaidSimilar(reflection)) parts.push(reflection)
+
+    const ground = groundReflection(parsed)
+    if (safeStr(ground) && !hasEchoSaidSimilar(ground)) parts.push(ground)
+
+  } else if (tone === 'curious') {
+    // Lean into the unknown, ask more
+    const feel = fresh(FEEL[mood] || FEEL.neutral, 'feel_' + mood)
+    if (safeStr(feel) && !hasEchoSaidSimilar(feel)) parts.push(feel)
+
+    const ground = groundReflection(parsed)
+    if (safeStr(ground) && !hasEchoSaidSimilar(ground)) parts.push(ground)
+
+  } else if (tone === 'grounding') {
+    // Anchor the person
+    const feel = fresh(FEEL[mood] || FEEL.neutral, 'feel_' + mood)
+    if (safeStr(feel) && !hasEchoSaidSimilar(feel)) parts.push(feel)
+
+    const reflectPool = REFLECT[mood] || REFLECT.neutral
+    const reflection  = safeStr(fresh(reflectPool, 'reflect_' + mood))
+    if (reflection && !hasEchoSaidSimilar(reflection)) parts.push(reflection)
+
+  } else if (tone === 'challenging') {
+    // Push back gently
+    const ground = groundReflection(parsed)
+    if (safeStr(ground) && !hasEchoSaidSimilar(ground)) parts.push(ground)
+
+    if (totalMessages > 6) {
+      const ref = safeStr(personalReference(parsed, memory, history))
+      if (ref && !hasEchoSaidSimilar(ref)) parts.push(ref)
+    }
+
+    const reflectPool = REFLECT[mood] || REFLECT.neutral
+    const reflection  = safeStr(fresh(reflectPool, 'reflect_' + mood))
+    if (reflection && !hasEchoSaidSimilar(reflection)) parts.push(reflection)
   }
 
-  // GROUND
-  const ground = groundReflection(parsed)
-  if (safeStr(ground) && coinFlip(0.55)) parts.push(ground)
-
-  // PERSONAL REFERENCE
-  if (totalMessages > 4) {
-    const ref = safeStr(personalReference(parsed, memory, history))
-    if (ref && coinFlip(0.5)) parts.push(ref)
+  // ── FILL to minimum substance if parts are thin ───────────────────────────
+  if (parts.length < 2) {
+    const feel = fresh(FEEL[mood] || FEEL.neutral, 'feel_' + mood + '_fill')
+    if (safeStr(feel) && !hasEchoSaidSimilar(feel)) parts.push(feel)
+  }
+  if (parts.length < 2) {
+    const soul = safeStr(echoSharesSomething(mood, userTurns))
+    if (soul && !hasEchoSaidSimilar(soul)) parts.push(soul)
   }
 
-  // REFLECT
-  const reflectPool = REFLECT[mood] || REFLECT.neutral
-  const reflection  = safeStr(fresh(reflectPool, 'reflect_' + mood))
-  if (reflection) parts.push(reflection)
+  // ── QUESTION — chosen carefully, never repeated ───────────────────────────
+  const recentAsst    = history.slice(-4).filter(m => m.role === 'assistant')
+  const questionCount = recentAsst.filter(m => (m.content || '').includes('?')).length
 
-  // QUESTION
-  const recentAsst     = history.slice(-4).filter(m => m.role === 'assistant')
-  const questionCount  = recentAsst.filter(m => m.content?.includes('?')).length
-  const shouldAsk      = questionCount < 2
-
-  if (shouldAsk) {
-    const q = safeStr(selectQuestion(parsed, memory, history))
-    if (q) parts.push(q)
+  if (questionCount < 2) {
+    // Try to find a question we have NOT asked before
+    const candidateQ = selectQuestion(parsed, memory, history)
+    const q = safeStr(candidateQ)
+    if (q && !hasAskedQuestion(q) && !hasEchoSaidSimilar(q)) {
+      parts.push(q)
+    } else if (parts.length < 2) {
+      // We've asked too many of our standard questions — use an open one
+      const openPool = LEARN.open.filter(o => !hasAskedQuestion(o))
+      const fallback = openPool.length ? openPool[0] : LEARN.mirror[Math.floor(Math.random() * LEARN.mirror.length)]
+      if (safeStr(fallback)) parts.push(fallback)
+    }
   } else if (parts.length < 3) {
-    const extra = safeStr(fresh(ECHO_SOUL.philosophical, 'philo'))
-    if (extra) parts.push(extra)
+    const extra = safeStr(fresh(ECHO_SOUL.philosophical, 'philo_fill'))
+    if (extra && !hasEchoSaidSimilar(extra)) parts.push(extra)
   }
 
   const result = assemble(parts)
-  return result || "I am here. Tell me more."
+  const final = result || "I am here. Tell me more."
+  recordEchoResponse(final)
+  return final
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
