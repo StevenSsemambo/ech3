@@ -104,6 +104,9 @@ function ack(anchor, mood) {
       `"${short}" — there's more in that than the surface.`,
       `I keep coming back to "${short}". Say more.`,
       `Something in "${anchor}" — I want to understand it properly.`,
+      `I caught "${short}". What's behind that?`,
+      `"${short}" — I'm paying attention to that. Go on.`,
+      `That's an interesting way to put it: "${short}". Tell me more.`,
     ],
   }
   return fresh(t[mood] || t.neutral)
@@ -113,7 +116,9 @@ function ack(anchor, mood) {
 function wordObs(parsed) {
   const tokens = parsed?.tokens || []
   const skip = new Set(['about','because','really','things','going','would','could','should',
-    'their','there','where','which','something','everything','nothing','anything','someone'])
+    'their','there','where','which','something','everything','nothing','anything','someone',
+    'earlier','before','later','always','never','right','maybe','think','saying','mentioned',
+    'talking','people','person','actually','honestly','anyway','either','pretty'])
   const word = tokens.find(t => t.length > 5 && !skip.has(t))
   if (!word) return null
 
@@ -208,19 +213,44 @@ function echoExperience(userText, mood) {
 }
 
 // ── ECHO VOLUNTEERS AN OPINION ────────────────────────────────────────────────
+// Only fires when user explicitly asks for opinion, or conversation is well established
+// and user's message genuinely touches a domain. NOT for emotional venting.
 function echoOpinion(parsed, userTurns) {
-  if (userTurns < 4 || !coin(0.2)) return null
   const lower = parsed.raw.toLowerCase()
+  const isEmotional = ['sadness','fear','anger','shame','confusion'].includes(parsed.mood)
 
+  // Explicit opinion request — always fire (any turn)
+  const explicitAsk = /what (do you think|is your (view|opinion|take))|do you think (that|this|the)|your (thoughts|view|opinion|take) on|what'?s your (take|view|opinion)/.test(lower)
+  if (explicitAsk) {
+    const map = [
+      { re: /\b(ai|tech|technology|phone|social media|internet|app)\b/i, key: 'onTechnology' },
+      { re: /\b(success|achieving|achieve|career|ambition)\b/i,           key: 'onSuccess' },
+      { re: /\b(africa|african|uganda|nairobi|continent|kampala)\b/i,     key: 'onAfrica' },
+      { re: /\b(people|humans?|human nature|behavior|behaviour)\b/i,      key: 'onHumanNature' },
+      { re: /\b(time|busy|priorities|schedule)\b/i,                       key: 'onTime' },
+      { re: /\b(creat|art|design|writing|building)\b/i,                   key: 'onCreativity' },
+    ]
+    for (const { re, key } of map) {
+      if (re.test(lower) && OPINIONS[key]) {
+        const opener  = pick(VOICE.openingPhrases)
+        const opinion = fresh(OPINIONS[key])
+        return `${opener}\n\n${opinion}`
+      }
+    }
+    // Generic opinion fallback
+    const b = echoLife.getRandomBelief()
+    if (b) return `${pick(VOICE.openingPhrases)}\n\n${b.belief}`
+  }
+
+  // Spontaneous opinion — only established conversation, non-emotional, by chance
+  if (userTurns < 5 || isEmotional || !coin(0.18)) return null
   const map = [
-    { re: /tech|ai|phone|social media|internet|app/,       key: 'onTechnology' },
-    { re: /success|achieve|fail|career|ambition/,          key: 'onSuccess' },
-    { re: /time|busy|rush|schedule|priorit/,               key: 'onTime' },
-    { re: /creat|art|design|write|build/,                  key: 'onCreativity' },
-    { re: /africa|african|continent|uganda|nairobi/,       key: 'onAfrica' },
-    { re: /people|human|nature|behavior|why do people/,    key: 'onHumanNature' },
+    { re: /\b(ai|tech|technology|social media)\b/i,                    key: 'onTechnology' },
+    { re: /\b(success|career|ambition)\b/i,                            key: 'onSuccess' },
+    { re: /\b(africa|african|uganda|kampala)\b/i,                      key: 'onAfrica' },
+    { re: /\b(time|prioriti|schedule)\b/i,                             key: 'onTime' },
+    { re: /\b(creat|art|design)\b/i,                                   key: 'onCreativity' },
   ]
-
   for (const { re, key } of map) {
     if (re.test(lower) && OPINIONS[key]) {
       const opener  = pick(VOICE.openingPhrases)
@@ -235,24 +265,36 @@ function echoOpinion(parsed, userTurns) {
 function closing(parsed, memory, history, mood, anchor) {
   const profile   = memory?.profile || {}
   const userTurns = history.filter(m => m.role === 'user').length
-  const { intent, isDeep } = parsed
+  const { intent, isDeep, raw } = parsed
 
-  // Profile gaps — early conversation
-  if (userTurns <= 5) {
-    if (!profile.name) return pick(["What's your name?", "What should I call you?"])
-    if (!profile.fears?.length && coin(0.4))
-      return `What do you worry about most — not the surface fear, the real one underneath?`
-    if (!profile.goals?.length && coin(0.35))
-      return `What do you actually want your life to look like right now?`
-  }
+  // Never ask name if they just introduced themselves this message
+  const justIntroduced = /\b(my name is|i'?m|call me)\s+([A-Z][a-z]+)/i.test(raw)
 
-  // Commitment follow-up
-  if (echoMemory.hasPendingCommitment() && coin(0.4)) {
+  // Commitment follow-up — always fires when relevant
+  if (echoMemory.hasPendingCommitment() && coin(0.5)) {
     const c = echoMemory.getPendingCommitment()
     if (c) {
       echoMemory.markCommitmentFollowedUp()
-      return `You said earlier you were going to ${firstN(c.text, 8)}. Where are you with that?`
+      return `You said you were going to ${firstN(c.text, 8)}. Where are you with that?`
     }
+  }
+
+  // Celebrating — push deeper into the win
+  if (intent === 'celebrating') {
+    return fresh([
+      `What made that possible — in you specifically, not just circumstances?`,
+      `How does it feel to have actually done that?`,
+      `What do you want to do with this feeling before it fades?`,
+    ])
+  }
+
+  // Profile gaps — early conversation only, and not if they just gave the info
+  if (userTurns <= 5 && !justIntroduced) {
+    if (!profile.name) return pick(["What's your name?", "What should I call you?"])
+    if (!profile.fears?.length && coin(0.35))
+      return `What do you worry about most — not the surface fear, the real one underneath?`
+    if (!profile.goals?.length && coin(0.3))
+      return `What do you actually want your life to look like right now?`
   }
 
   // Deep + emotional → specific deepener
@@ -263,20 +305,12 @@ function closing(parsed, memory, history, mood, anchor) {
       anger:     [`What did you need that you didn't get?`, `What's the grief underneath the anger?`, `What would it take to actually resolve this?`],
       confusion: [`If you already knew the answer — what would it be?`, `What would you do if you had to choose right now?`],
       shame:     [`Where did you first learn this was something to be ashamed of?`, `What would you say to someone you loved carrying this exact thing?`],
-      hope:      [`What's actually in the way — the real thing?`, `What are you waiting for, exactly?`],
+      hope:      [`What's actually in the way — the real thing, not the surface one?`, `What are you waiting for, exactly?`],
+      love:      [`What does that connection actually mean to you right now?`, `How does caring about them show up in how you live?`],
       neutral:   [`What's the most honest thing you could say right now?`, `What's the part you almost didn't say?`],
     }
     const pool = deep[mood] || deep.neutral
     return fresh(pool)
-  }
-
-  // Celebrating
-  if (intent === 'celebrating') {
-    return fresh([
-      `What made that possible — in you specifically?`,
-      `How does it feel to have actually done that?`,
-      `What do you want to do with this before the feeling fades?`,
-    ])
   }
 
   // Default open
@@ -286,13 +320,15 @@ function closing(parsed, memory, history, mood, anchor) {
     `Keep going. What else?`,
     `What's underneath that?`,
     `Say more.`,
-    `What does this actually feel like from inside it?`,
+    `What does this feel like from inside it?`,
+    `What haven't you said yet?`,
   ])
 }
 
 // ── DIRECT QUESTION HANDLER ───────────────────────────────────────────────────
 function directQuestion(userText, memory) {
   const lower = userText.toLowerCase()
+  const profile = memory?.profile || {}
 
   // Echo shares a belief / opinion
   if (/what (do you|do you actually) (think|believe|feel)|your (opinion|view|take|thoughts?) on|do you have (an? )?opinion/.test(lower)) {
@@ -310,8 +346,8 @@ function directQuestion(userText, memory) {
     if (p) return `One thing I find genuinely fascinating: ${p.domain}.\n\n${p.notes}`
   }
 
-  // Echo's experiences
-  if (/pattern (you'?ve|you have) (seen|noticed|observed)|what (have you|do you) (seen|witnessed|noticed|observed)|tell me (about|a) (story|experience|observation)/.test(lower)) {
+  // Echo's experiences / stories
+  if (/pattern (you'?ve|you have) (seen|noticed|observed)|what (have you|do you) (seen|witnessed|noticed|observed)|tell me (about|a) (story|experience|observation|pattern)/.test(lower)) {
     const e = echoLife.experiences[Math.floor(Math.random() * echoLife.experiences.length)]
     if (e) return `Something I've observed — I call it "${e.title}":\n\n${e.story}\n\nThe insight that stuck: ${e.insight}`
   }
@@ -322,14 +358,25 @@ function directQuestion(userText, memory) {
     if (b) return `Something I find beautiful: ${b}`
   }
 
-  // Are you conscious / what are you
-  if (/are you conscious|do you feel|what (are you|is it like to be)|what'?s it like being|do you experience/.test(lower)) {
+  // Are you conscious / what are you — broader catch
+  if (/are you conscious|do you (feel|experience|think|have feelings)|what (are you|is it like to be you)|what'?s it like being (an? )?ai|just pretend|actually (think|feel)|sentient/.test(lower)) {
     return echoLife.getSelfReflection('consciousness')
   }
 
   // Creator / who made you
   if (/who (made|built|created) you|who'?s (your|the) (creator|developer|maker)|steven|saymytech/.test(lower)) {
     return pick(CREATOR_PRIDE.aboutCreator)
+  }
+
+  // Name introduction — don't ask their name if they just gave it
+  const nameGiven = userText.match(/\b(my name is|i'?m|call me)\s+([A-Z][a-z]+)/i)
+  if (nameGiven && !profile.name) {
+    const n = nameGiven[2]
+    return fresh([
+      `${n}. Good to have a name for you.\n\nWhat's going on with you today?`,
+      `${n}. Nice to meet you — what do you want to get into?`,
+      `${n}. I'll remember that.\n\nWhat's actually on your mind right now?`,
+    ])
   }
 
   return null
