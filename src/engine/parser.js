@@ -21,14 +21,14 @@ const LEXICON = {
     shame:     ['ashamed','embarrassed','guilty','regret','mistake','failed','failure','worthless','stupid','pathetic','weak','disappointing'],
   },
   intents: {
-    seeking_advice:  ['should i','what do i','how do i','can i','is it okay','do you think','what would you','help me','advice','guidance','opinion','suggest'],
-    venting:         ["i just","i can't","i'm so","i feel","it's not fair","why does","nobody","always","never","everything","nothing","i hate","i'm done"],
-    reflecting:      ["i've been thinking","lately","recently","i realize","i noticed","i wonder","looking back","in hindsight","i guess","i suppose"],
-    celebrating:     ['i did it','i got','i finally','i passed','i achieved','great news','good news',"i'm proud",'success','worked out'],
-    questioning:     ['why','what if','does it','will i','makes sense','meaning','purpose','point','reason','worth','important'],
-    planning:        ["i want to","i'm going to",'my goal',"i plan","i'm thinking about",'i will','next step','working on','trying to','focusing on'],
+    seeking_advice:  ['should i','what do i do','how do i','is it okay to','do you think i should','what would you do','help me figure','advice','guidance','give me your opinion','what do you suggest','what should i'],
+    venting:         ["i just can't","i can't take","i'm so tired","it's not fair","why does this","nobody understands","always happens","never works","everything is falling","nothing is working","i hate my","i'm done with","i give up","fed up"],
+    reflecting:      ["i've been thinking","lately i've","recently i","i realize now","i noticed that","i wonder if","looking back","in hindsight","i guess i","i suppose i"],
+    celebrating:     ['i did it','i got the','i finally','i passed','i achieved','great news','good news',"i'm proud",'it worked out','i got accepted','i got promoted'],
+    questioning:     ['what is the meaning','what is the point','does any of this','will i ever','makes any sense','what is my purpose','is there a reason','worth it anymore'],
+    planning:        ["i want to start","i'm going to","my goal is","i plan to","i'm thinking about starting",'next step is','working on','trying to build','focusing on becoming'],
   },
-  urgency: ['urgent','emergency','crisis','desperate','help','please','now','immediately','serious','critical','must','have to',"can't wait",'right now','today'],
+  urgency: ['urgent','emergency','crisis','suicidal','kill myself','end my life','hurt myself','cant go on','cannot go on','want to die','help me please','desperate','immediately','critical'],
   depth:   ['actually','honestly','truth','real','really','deep down','part of me',"i've never","never told",'secret','hard to say','difficult','vulnerable','admit'],
 }
 
