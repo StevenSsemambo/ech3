@@ -229,3 +229,70 @@ export const getProactiveMemory = (memory, currentParsed) => {
 
   return null
 }
+
+// ── INTEREST DETECTION ────────────────────────────────────────────────────────
+// Detects topics the user lights up about — for Echo to reference autonomously
+
+const INTEREST_SIGNALS = {
+  music:       ['music','song','album','playlist','artist','band','concert','guitar','piano','listen','track','lyrics'],
+  sport:       ['football','soccer','basketball','cricket','tennis','rugby','sport','match','game','team','score','player','training','gym'],
+  food:        ['food','cook','restaurant','eat','recipe','cuisine','meal','chef','bake','dish','taste','flavour'],
+  travel:      ['travel','trip','city','country','flight','hotel','explore','visited','abroad','holiday','adventure'],
+  books:       ['book','read','novel','author','chapter','story','fiction','nonfiction','library','literature'],
+  film:        ['film','movie','series','watch','episode','director','cinema','documentary','show'],
+  technology:  ['tech','code','software','app','startup','ai','computer','programming','digital','internet','device'],
+  nature:      ['nature','outdoors','hiking','park','forest','ocean','mountains','animals','environment','garden'],
+  faith:       ['faith','god','prayer','church','mosque','temple','spiritual','religion','belief','universe'],
+  art:         ['art','paint','draw','design','photography','creative','gallery','exhibition','sketch','colour'],
+  business:    ['business','work','career','startup','company','money','invest','finance','market','strategy'],
+  family:      ['family','parents','mother','father','sister','brother','children','kids','home','relatives'],
+}
+
+export const detectInterests = (allHistory, existingInterests = []) => {
+  const allText = allHistory
+    .filter(m => m.role === 'user')
+    .map(m => (m.content || '').toLowerCase())
+    .join(' ')
+
+  const detected = []
+  for (const [interest, signals] of Object.entries(INTEREST_SIGNALS)) {
+    const hits = signals.filter(s => allText.includes(s)).length
+    if (hits >= 2) detected.push(interest)
+  }
+
+  // Merge with existing, deduplicate
+  return [...new Set([...existingInterests, ...detected])].slice(0, 8)
+}
+
+// ── COMMUNICATION STYLE DETECTION ─────────────────────────────────────────────
+export const detectCommunicationStyle = (history) => {
+  const userMsgs = history.filter(m => m.role === 'user')
+  if (userMsgs.length < 5) return null
+
+  const avgLen = userMsgs.reduce((a, m) => a + (m.content || '').split(' ').length, 0) / userMsgs.length
+  const questionRate = userMsgs.filter(m => (m.content || '').includes('?')).length / userMsgs.length
+  const hasDepthWords = userMsgs.some(m => {
+    const t = (m.content || '').toLowerCase()
+    return ['actually','honestly','truth','really','deep','part of me','never told'].some(w => t.includes(w))
+  })
+
+  if (avgLen > 50 && hasDepthWords)     return 'deep_reflective'
+  if (avgLen > 30 && questionRate > 0.4) return 'curious_explorer'
+  if (avgLen < 12)                       return 'brief_direct'
+  if (questionRate > 0.5)                return 'question_led'
+  return 'conversational'
+}
+
+// ── PROFILE UPDATE WITH INTERESTS ─────────────────────────────────────────────
+export const enrichProfileFromHistory = (history, profile) => {
+  const updatedInterests = detectInterests(history, profile.interests || [])
+  const commStyle = detectCommunicationStyle(history)
+  const lastMood  = history.filter(m => m.role === 'user').slice(-1)[0]?.mood || null
+
+  return {
+    ...profile,
+    interests:          updatedInterests,
+    communicationStyle: commStyle || profile.communicationStyle,
+    lastKnownMood:      lastMood  || profile.lastKnownMood,
+  }
+}
