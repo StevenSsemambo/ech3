@@ -277,6 +277,26 @@ export const echoMemory = {
     return candidates[0] || null
   },
 
+  // Like recall() but returns a ready-to-use response sentence rather than raw exchange
+  // This is what brain.js and responder.js should call for natural context threading
+  recallAsThread(currentText) {
+    const exchange = this.recall(currentText)
+    if (!exchange) return null
+
+    const snippet = exchange.user.slice(0, 70).trim()
+    const topic   = exchange.topics[0] || 'this'
+
+    const templates = [
+      `Something you said earlier is sitting with me — "${snippet}…" — I keep thinking about how that connects to this.`,
+      `You mentioned ${topic} before. I don't think that thread is finished.`,
+      `Earlier you said "${snippet}…" — I notice it coming up again. There's a pattern here worth naming.`,
+      `This keeps circling back to ${topic}. That's not a coincidence.`,
+      `I remember what you said about ${topic}. I think you're still in that same current — just a different moment in it.`,
+    ]
+
+    return templates[Math.floor(Math.random() * templates.length)]
+  },
+
   // Generates a "growth reflection" — who this person is becoming
   getGrowthReflection(profile = {}) {
     if (_index.growthReflection) return _index.growthReflection
