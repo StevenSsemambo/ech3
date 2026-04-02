@@ -783,3 +783,104 @@ export const buildKnowledgeMessage = (profile, graph, preferredMode = null) => {
   if (mode === 'conversation_starter') return `${name}${share.text}`
   return `${name}${intro}\n\n${share.text}`
 }
+
+// ── DIRECT DOMAIN QUERY — for factual question routing ────────────────────────
+// Called by responder.js when parser detects isFactualQuestion = true.
+// Returns a rich object with fact + perspective + conversation_starter
+// so responder can build a complete, grounded response in one call.
+//
+// Usage:
+//   const result = queryKnowledge('psychology')
+//   → { fact, perspective, conversation_starter, label, domain }
+
+// Maps parser's factualDomain keys → knowledge.js DOMAINS keys
+const DOMAIN_KEY_MAP = {
+  psychology:    'psychology',
+  philosophy:    'philosophy',
+  history:       'history',
+  physics:       'physics',
+  biology:       'biology',
+  tech:          'technology',
+  economics:     'economics',
+  africa:        'africa',
+  environment:   'environment',
+  health:        'health',
+  sociology:     'sociology',
+  neuroscience:  'psychology',   // maps to closest domain
+  politics:      'history',      // maps to closest
+  education:     'sociology',
+  entrepreneurship: 'economics',
+}
+
+export const queryKnowledge = (factualDomain, mode = 'all') => {
+  // Resolve to a known DOMAINS key
+  const resolvedKey = DOMAIN_KEY_MAP[factualDomain] || null
+  const keys = Object.keys(DOMAINS)
+
+  // Find the matching domain object, or fall back to random
+  let domain = null
+  if (resolvedKey && DOMAINS[resolvedKey]) {
+    domain = DOMAINS[resolvedKey]
+  } else {
+    // Try partial match on label
+    const labelMatch = Object.values(DOMAINS).find(d =>
+      d.label?.toLowerCase().includes(factualDomain?.toLowerCase() || '')
+    )
+    domain = labelMatch || DOMAINS[keys[Math.floor(Math.random() * keys.length)]]
+  }
+
+  if (!domain) return null
+
+  const fact               = pick(domain.facts               || [])
+  const perspective        = pick(domain.perspectives        || [])
+  const conversation_starter = pick(domain.conversation_starters || [])
+
+  if (mode === 'fact')               return { fact, label: domain.label, domain: factualDomain }
+  if (mode === 'perspective')        return { perspective, label: domain.label, domain: factualDomain }
+  if (mode === 'conversation_starter') return { conversation_starter, label: domain.label, domain: factualDomain }
+
+  // mode === 'all' — return everything, let the caller compose
+  return {
+    fact,
+    perspective,
+    conversation_starter,
+    label: domain.label,
+    domain: factualDomain,
+  }
+}
+
+// ── FACTUAL RESPONSE BUILDER — composes Echo's full reply to a factual question ──
+// Wraps queryKnowledge() with Echo's voice: fact → perspective → open question.
+// responder.js calls this directly.
+export const buildFactualResponse = (factualDomain, userQuestion = '') => {
+  const data = queryKnowledge(factualDomain, 'all')
+  if (!data) return null
+
+  const { fact, perspective, conversation_starter, label } = data
+
+  // Intro lines that frame factual sharing without sounding like a textbook
+  const intros = [
+    `Here's something solid on that —`,
+    `I actually know a bit about ${label?.toLowerCase() || 'this'}.`,
+    `Let me give you the real picture on that.`,
+    `Good question — here's what the evidence actually says:`,
+    `I've got something worth sharing on this:`,
+    `On that specifically —`,
+  ]
+  const bridges = [
+    `\n\nAnd here's my honest take on it:`,
+    `\n\nThe part I find most interesting:`,
+    `\n\nWhat that actually means, in my view:`,
+    `\n\nWhere I land on this:`,
+  ]
+
+  const intro  = pick(intros)
+  const bridge = pick(bridges)
+
+  // Always: fact + perspective. Conditionally: conversation starter.
+  const parts = [`${intro}\n\n${fact}`, `${bridge}\n\n${perspective}`]
+  if (conversation_starter && Math.random() < 0.65) {
+    parts.push(`\n\n${conversation_starter}`)
+  }
+  return parts.join('')
+}
