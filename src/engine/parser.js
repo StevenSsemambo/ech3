@@ -27,7 +27,7 @@ const LEXICON = {
     celebrating:     ['i did it','i got the','i finally','i passed','i achieved','great news','good news',"i'm proud",'it worked out','i got accepted','i got promoted'],
     questioning:     ['what is the meaning','what is the point','does any of this','will i ever','makes any sense','what is my purpose','is there a reason','worth it anymore'],
     planning:        ["i want to start","i'm going to","my goal is","i plan to","i'm thinking about starting",'next step is','working on','trying to build','focusing on becoming'],
-    // ── NEW: direct questions about Echo itself ──────────────────────────────
+    // ── Direct questions about Echo itself ──────────────────────────────────────
     asking_about_echo: [
       "what's your purpose","what is your purpose","what are you for",
       "can you be funny","are you funny","do you have humour","do you have humor",
@@ -47,8 +47,55 @@ const LEXICON = {
   depth:   ['actually','honestly','truth','real','really','deep down','part of me',"i've never","never told",'secret','hard to say','difficult','vulnerable','admit'],
 }
 
+// ── FACTUAL QUESTION DETECTION ────────────────────────────────────────────────
+// Maps keywords to knowledge.js domain keys for direct lookup
+const FACTUAL_DOMAIN_MAP = [
+  { patterns: ['psychology','mind','mental','brain','emotion','behaviour','behavior','habit','decision','personality','cognitive','bias','dunning','kruger','negativity bias'], domain: 'psychology' },
+  { patterns: ['philosophy','meaning','purpose','ethics','existence','free will','stoic','stoicism','plato','aristotle','nietzsche','camus','existential','moral','ubuntu philosophy','kant'], domain: 'philosophy' },
+  { patterns: ['africa','african','uganda','kenya','nigeria','ghana','nairobi','kampala','lagos','accra','ubuntu','mansa musa','timbuktu','colonialism','sahara','great zimbabwe','berlin conference'], domain: 'african_history_culture' },
+  { patterns: ['history','war','empire','roman','mongol','medieval','revolution','napoleon','cold war','world war','ancient','civilisation','civilization','black death','printing press'], domain: 'history_world' },
+  { patterns: ['physics','universe','quantum','relativity','space','light','atom','energy','gravity','einstein','dark matter','black hole','time dilation','neutron star','big bang'], domain: 'science_physics' },
+  { patterns: ['biology','evolution','dna','gene','cell','organism','body','health','medicine','bacteria','virus','gut','microbiome','crispr','placebo'], domain: 'science_biology' },
+  { patterns: ['technology','tech','ai','artificial intelligence','internet','software','code','computer','algorithm','machine learning','robot','digital','chip','semiconductor','social media'], domain: 'technology_ai' },
+  { patterns: ['economics','economy','money','finance','wealth','poverty','capitalism','market','trade','inflation','gdp','investment','inequality'], domain: 'economics' },
+  { patterns: ['climate','environment','planet','carbon','fossil fuel','renewable','global warming','ecology','species','ocean','pollution','deforestation'], domain: 'climate_environment' },
+  { patterns: ['art','music','literature','creative writing','painting','design','poetry','film','cinema','novel','artist','culture','creativity'], domain: 'arts_culture' },
+  { patterns: ['relationship','dating','marriage','friendship','family','attachment','communication','trust','intimacy','breakup','partner','love language'], domain: 'relationships' },
+  { patterns: ['health','wellbeing','sleep','exercise','diet','nutrition','fitness','meditation','mental health','longevity','recovery'], domain: 'health_wellbeing' },
+  { patterns: ['politics','government','democracy','power','leader','election','justice','law','society','inequality','rights','freedom','policy'], domain: 'politics_society' },
+  { patterns: ['startup','entrepreneur','business','company','product','venture','investor','founder','career','profession','workplace','management'], domain: 'entrepreneurship' },
+  { patterns: ['education','learning','school','university','knowledge','teach','study','skill','intelligence','growth mindset','curriculum'], domain: 'education_learning' },
+]
+
+// Factual question phrasing — seeking information, not personal advice/therapy
+const FACTUAL_QUESTION_PHRASES = [
+  /^(what is|what are|what was|what were|what does|what do|what did|how does|how do|how did|why does|why do|why did|who is|who was|who were|tell me about|explain|describe|what can you tell me about|what do you know about|give me facts|give me information|what happened|when did|where did|how was|how are)\b/i,
+]
+
+const FACTUAL_EXCLUSIONS = [
+  /^(what should i|how do i|what would you do|what do you think i should|help me with my|should i|what would you recommend)/i,
+  /\b(i feel|i'm feeling|i am feeling|i feel like|feeling|afraid|scared|my situation|my problem|my life|my relationship trouble|i've been going through|i'm going through)\b/i,
+]
+
 export const tokenize = (text) =>
   text.toLowerCase().replace(/[^a-z\s']/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOPWORDS.has(w))
+
+// Detect if a message is a factual/knowledge question and which domain it maps to
+const detectFactualQuestion = (lower) => {
+  const isQuestion = FACTUAL_QUESTION_PHRASES.some(p => p.test(lower.trim()))
+  if (!isQuestion) return { isFactualQuestion: false, factualDomain: null }
+
+  const isPersonal = FACTUAL_EXCLUSIONS.some(p => p.test(lower))
+  if (isPersonal) return { isFactualQuestion: false, factualDomain: null }
+
+  for (const { patterns, domain } of FACTUAL_DOMAIN_MAP) {
+    if (patterns.some(p => lower.includes(p))) {
+      return { isFactualQuestion: true, factualDomain: domain }
+    }
+  }
+
+  return { isFactualQuestion: true, factualDomain: null }
+}
 
 export const parseInput = (text) => {
   const lower = text.toLowerCase()
@@ -74,13 +121,15 @@ export const parseInput = (text) => {
   const isDeep     = LEXICON.depth.some(w => lower.includes(w))
   const isQuestion = text.includes('?')
 
-  // ── isAboutEcho flag — marks messages that are directly asking about Echo ──
-  // Used by brain.js and responder.js to route to directQuestionRouter reliably
+  // ── isAboutEcho flag — marks messages directly asking about Echo ──
   const isAboutEcho = LEXICON.intents.asking_about_echo.some(p => lower.includes(p)) || intent === 'asking_about_echo'
+
+  // ── Factual question detection ────────────────────────────────────────────
+  const { isFactualQuestion, factualDomain } = detectFactualQuestion(lower)
 
   const concepts   = tokens.filter(t => t.length > 3).slice(0, 8)
   const sentences  = text.split(/[.!?]+/).filter(s => s.trim().length > 3)
   const complexity = sentences.length > 4 ? 'high' : sentences.length > 2 ? 'medium' : 'low'
 
-  return { mood, intent, urgency, isDeep, isQuestion, isAboutEcho, concepts, complexity, tokens, raw: text }
+  return { mood, intent, urgency, isDeep, isQuestion, isAboutEcho, isFactualQuestion, factualDomain, concepts, complexity, tokens, raw: text }
 }
