@@ -196,6 +196,52 @@ export const getTransitionBridge = (fromMode, toMode, profile) => {
   return pool[Math.floor(Math.random() * pool.length)]
 }
 
+// ── NAME INJECTION ────────────────────────────────────────────────────────────
+// Real humans naturally use your name in conversation. Echo should too.
+// Fires occasionally — not every message, which would feel robotic.
+
+let _nameUsedAt = -99 // turn number when name was last used
+
+export const shouldUseName = (profile, userTurns) => {
+  if (!profile?.name) return false
+  // Use name: on first reply after learning it, then every ~6-8 turns
+  const gap = userTurns - _nameUsedAt
+  if (gap < 5) return false
+  const threshold = _nameUsedAt === -99 ? 0 : 0.25 // always fire on first use
+  return Math.random() < threshold || gap >= 8
+}
+
+export const markNameUsed = (userTurns) => {
+  _nameUsedAt = userTurns
+}
+
+// Prepend name naturally to an existing response string
+export const injectName = (response, name, style = 'prefix') => {
+  if (!response || !name) return response
+  const styles = {
+    prefix:  `${name} — ${response}`,
+    inline:  response.replace(/\.\s+/, `. ${name}, `),
+    address: `${name}.\n\n${response}`,
+  }
+  return styles[style] || styles.prefix
+}
+
+// ── CONTEXT THREADING TRACKER ─────────────────────────────────────────────────
+// Tracks the last significant topic + turn so echoMemory.recall() can be
+// triggered naturally without firing on every single message
+
+let _lastRecallTurn = -10
+
+export const shouldAttemptRecall = (userTurns) => {
+  if (userTurns < 4) return false
+  if (userTurns - _lastRecallTurn < 4) return false
+  return Math.random() < 0.35
+}
+
+export const markRecallUsed = (userTurns) => {
+  _lastRecallTurn = userTurns
+}
+
 export const resetSession = () => {
   _sessionPhrases.clear()
   _sessionOpenings.clear()
@@ -205,4 +251,6 @@ export const resetSession = () => {
   _modeHistory = []
   _turnsInMode = 0
   _toneHistory.length = 0
+  _nameUsedAt = -99
+  _lastRecallTurn = -10
 }
