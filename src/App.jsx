@@ -22,6 +22,8 @@ import {
 } from './engine/wakeWord.js'
 import { resetSession } from './engine/conversationState.js'
 import { resetConversationEngine, processTurn } from './engine/conversation_engine.js'
+import { processWithBrain } from './engine/brain.js'
+import { echoMemory } from './engine/echoMemory.js'
 
 const { serif, sans } = FONTS
 const pick    = a => a?.[Math.floor(Math.random() * a.length)] || ''
@@ -339,6 +341,7 @@ export default function App() {
   const bootChat = () => {
     resetSession()
     resetConversationEngine()
+    echoMemory.reset()
     const m        = memRef.current
     const gap      = daysSince(m.lastSeen)
     const isFirst  = (m.totalMessages || 0) === 0
@@ -465,12 +468,29 @@ export default function App() {
     const proactive = getProactiveMemory(memRef.current, parsed)
 
     setTimeout(async () => {
-      const response      = process(t, newH, isWiser)
-      const safeResponse  = safeStr(response) || "I am here. Tell me more."
-      const safeProactive = safeStr(proactive)
-      const finalResponse = safeProactive && Math.random() > 0.6
-        ? `${safeProactive}\n\n${safeResponse}`
-        : safeResponse
+      // ── BRAIN-FIRST: Custom NLG brain → phrase engine fallback ──────────
+      let finalResponse = null
+
+      // 1. Custom brain — composes from user's actual words + memory
+      try {
+        const brainResponse = await processWithBrain(t, newH, memRef.current, isWiser)
+        if (brainResponse) finalResponse = brainResponse
+      } catch (_) {
+        // Brain error — phrase engine handles it
+      }
+
+      // 2. Phrase engine fallback
+      if (!finalResponse) {
+        const phraseResponse = process(t, newH, isWiser)
+        const safeProactive  = safeStr(proactive)
+        const safePhrase     = safeStr(phraseResponse) || 'I am here. Tell me more.'
+        finalResponse = safeProactive && Math.random() > 0.6
+          ? `${safeProactive}\n\n${safePhrase}`
+          : safePhrase
+      }
+
+      // 3. Index this exchange in episodic memory (for next turn context)
+      echoMemory.indexExchange(t, finalResponse, memRef.current?.profile)
 
       const newMsg = { role:'assistant', content:finalResponse, ts:new Date(), fresh:true }
       setter(prev => { setLatestIdx(prev.length); return [...prev, newMsg] })
@@ -479,7 +499,7 @@ export default function App() {
       const voiceOpts = isWiser ? { rate:0.72, pitch:1.06 } : { rate:0.76 }
       await echoSpeak(finalResponse, voiceOpts)
       setTimeout(() => inputRef.current?.focus(), 80)
-    }, 500 + Math.random()*500)
+    }, 300)
   }, [input, thinking, chatMsgs, wiserMsgs, process, echoSpeak, initVS, resetIdle])
 
   // ── MIC ───────────────────────────────────────────────────────────────────
