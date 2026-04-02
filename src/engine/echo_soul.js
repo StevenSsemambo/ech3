@@ -514,23 +514,38 @@ export const SENSITIVITY = {
 // Patterns that indicate casual / light messages — so Echo doesn't over-therapise
 
 export const CASUAL_PATTERNS = {
-  greetings:   ['hi','hey','hello','what\'s up','wassup','sup','hiya','howdy','yo','hola','morning','evening','night'],
-  howAreYou:   ['how are you','how\'re you','how r u','you good','you okay','you alright','how\'s it going','how are things','how you doing','how you been'],
-  bye:         ['bye','goodbye','see you','see ya','later','ttyl','gotta go','take care','talk soon','catch you later'],
-  thanks:      ['thank you','thanks','thank u','thx','appreciate','cheers','ta'],
-  sorry:       ['sorry','apologise','apologize','my bad','forgive me','pardon'],
+  greetings:   ['hi','hey','hello','what\'s up','wassup','sup','hiya','howdy','yo','hola','morning','evening','night','good morning','good evening','good afternoon','good night'],
+  howAreYou:   ['how are you','how\'re you','how r u','you good','you okay','you alright','how\'s it going','how are things','how you doing','how you been','how do you feel','are you okay','you doing okay'],
+  bye:         ['bye','goodbye','see you','see ya','later','ttyl','gotta go','take care','talk soon','catch you later','see u'],
+  thanks:      ['thank you','thanks','thank u','thx','appreciate','cheers','ta','grateful'],
+  sorry:       ['sorry','apologise','apologize','my bad','forgive me','pardon','my mistake'],
   affirm:      ['ok','okay','sure','yeah','yep','yup','alright','right','mhm','mmm','uh huh','got it','fine','cool','nice','great','awesome'],
   humor:       ['lol','lmao','haha','hehe','😂','😄','😅','funny','hilarious','jokes','jk','just kidding'],
-  bored:       ['bored','nothing to do','so bored','killing time','what to do'],
-  name:        ['what\'s your name','who are you','what are you','tell me about yourself','who made you','who built you','who created you'],
-  opinions:    ['what do you think','your opinion','your thoughts','do you like','do you prefer','what\'s your favourite','what\'s your fav'],
+  bored:       ['bored','nothing to do','so bored','killing time','what to do','i\'m bored'],
+  aboutEcho:   [
+    'who are you','what are you','tell me about yourself','tell me about echo',
+    'describe yourself','introduce yourself','what can you do','what do you do',
+    'who is echo','about yourself','about you','your name','what\'s your name',
+    'who made you','who built you','who created you','who is your creator',
+    'what are your capabilities','how do you work','are you an ai','are you a bot',
+    'what kind of ai','what type of ai','tell me more about you',
+    'i want to know about you','what should i know about you',
+  ],
+  opinions:    ['what do you think','your opinion','your thoughts','do you like','do you prefer','what\'s your favourite','what\'s your fav','what do you believe','your view on'],
 }
 
 export const detectCasualIntent = (text) => {
   const lower = text.toLowerCase().trim()
   const wordCount = lower.split(/\s+/).length
 
+  // Check greetings first (highest priority for short messages)
+  if (CASUAL_PATTERNS.greetings.some(p => lower === p || lower.startsWith(p + ' ') || lower.startsWith(p + '!'))) {
+    // Only treat as greeting if the message is short (not "hi, I'm feeling depressed")
+    if (wordCount <= 6) return 'greetings'
+  }
+
   for (const [type, patterns] of Object.entries(CASUAL_PATTERNS)) {
+    if (type === 'greetings') continue // already handled above
     if (patterns.some(p => lower.includes(p))) return type
   }
 
