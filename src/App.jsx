@@ -9,6 +9,7 @@ import { reasonPatterns, constructResponse, wiserSelf, getVolunteerMessage } fro
 import { inferBeliefs, buildLanguageProfile, getCircadianState, circadianGreeting, getEchoEmotionalState, getProactiveMemory, detectInterests, enrichProfileFromHistory } from './engine/belief.js'
 import { initVoice, speak, stopSpeaking, setVoiceCallbacks, initRecognition, startListening, stopListening, initAmbient, resumeAudio } from './engine/voice.js'
 import { lifeEngine } from './engine/lifeEngine.js'
+import { IDENTITY } from './engine/echo_soul.js'
 import {
   isReminderRequest, parseReminderTime, parseReminderContent,
   createReminder, initReminders, deleteReminder,
@@ -20,6 +21,7 @@ import {
   stopWakeWordListener, isWakeWordSupported, getWakeResponse,
 } from './engine/wakeWord.js'
 import { resetSession } from './engine/conversationState.js'
+import { resetConversationEngine, processTurn } from './engine/conversation_engine.js'
 
 const { serif, sans } = FONTS
 const pick    = a => a?.[Math.floor(Math.random() * a.length)] || ''
@@ -335,31 +337,40 @@ export default function App() {
 
   // ── BOOT CHAT ─────────────────────────────────────────────────────────────
   const bootChat = () => {
-    resetSession()  // clear phrase memory for new session
-    const m       = memRef.current
-    const gap     = daysSince(m.lastSeen)
-    const isFirst = (m.totalMessages||0) === 0
-    const circadian  = getCircadianState()
-    const echoState  = getEchoEmotionalState(m)
+    resetSession()
+    resetConversationEngine()
+    const m        = memRef.current
+    const gap      = daysSince(m.lastSeen)
+    const isFirst  = (m.totalMessages || 0) === 0
+    const circadian = getCircadianState()
+    const echoState = getEchoEmotionalState(m)
 
     let msg
     if (isFirst) {
-      msg = "I am ECHO.\n\nI am not a chatbot. I am not here to give you answers.\n\nI am here to learn who you are — and over time, become a wiser reflection of you. The more honestly you talk to me, the more clearly I can do that.\n\nWhat brought you here today?"
+      // First ever open — Echo introduces himself immediately
+      msg = pick(IDENTITY.appOpenFirst)
     } else {
       // Check for daily thought first
-      const history = chatMsgs
+      const history    = chatMsgs
       const dailyThought = lifeEngine.getDailyThought(m, history)
       if (dailyThought && safeStr(dailyThought.message)) {
         msg = dailyThought.message
         persist({ lastDailyThoughtAt: new Date().toISOString() })
       } else if (gap === 0) {
+        // Returning same day — use emotional state or circadian
         msg = safeStr(echoState.openingTone) || circadianGreeting(circadian, m.profile, gap)
       } else {
-        msg = lifeEngine.getCheckIn(m, gap)
+        // Returning after days — use personalised check-in from IDENTITY
+        const options = IDENTITY.appOpenReturning(
+          m.profile?.name,
+          gap,
+          m.profile?.lastKnownMood
+        )
+        msg = pick(options)
       }
     }
 
-    const finalMsg = safeStr(msg) || "I am here. What is on your mind?"
+    const finalMsg = safeStr(msg) || pick(IDENTITY.appOpenFirst)
     setChatMsgs([{ role:'assistant', content:finalMsg, ts:new Date(), fresh:true, type:'greeting' }])
     setLatestIdx(0)
   }
