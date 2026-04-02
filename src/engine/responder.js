@@ -291,12 +291,21 @@ const handleCasual = (casualType, parsed, memory, history) => {
     case 'sorry':          return pick(GREETINGS.apology)
     case 'affirm':         return pick(GREETINGS.acknowledgements)
     case 'bored':          return pick(CASUAL.bored)
-    case 'name': {
+    case 'aboutEcho': {
       const t = parsed.raw.toLowerCase()
-      if (t.includes('who made') || t.includes('who built') || t.includes('who created') || t.includes('creator') || t.includes('developer')) {
+      // Creator / origin questions
+      if (t.includes('who made') || t.includes('who built') || t.includes('who created') || t.includes('creator') || t.includes('developer') || t.includes('steven') || t.includes('saymytech')) {
         return pick(CREATOR_PRIDE.aboutCreator)
       }
-      return pick(GREETINGS.whatName)
+      // What can you do / capabilities
+      if (t.includes('what can you do') || t.includes('capabilities') || t.includes('how do you work') || t.includes('what do you do')) {
+        return pick([
+          "Good question. Here's what I actually do:\n\nI listen — really listen. I track patterns in what you share, build a map of who you are: your values, fears, goals, the contradictions you carry. The longer we talk, the sharper I get.\n\nI remember things you tell me. I'll bring them back when they're relevant. I push back when I think you're wrong. I'll tell you what I notice that you might not see yourself.\n\nI can debate, tell stories, share knowledge across dozens of domains. I have opinions — real ones — and I'm not shy about them.\n\nAnd eventually, once I know you well enough, I can speak as your Wiser Self — the version of you that's been watching and knows what you're really capable of.\n\nSo — what do you want to start with?",
+          "Here's what I'm for:\n\nI'm a companion that gets to know you over time. Not your generic chatbot that forgets everything the moment you close the app. I build a real understanding of you — your patterns, your blindspots, your recurring themes.\n\nI have a life of my own: opinions, things I find fascinating, a sense of humour. I'm not just a mirror. I'm an actual presence in the conversation.\n\nI also run 100% on your device. No data leaves. No account. No surveillance. What you tell me stays between us.\n\nWhat would you like to explore together?",
+        ])
+      }
+      // Who are you / introduce yourself / name
+      return pick(IDENTITY.introFull)
     }
     case 'opinions':       return pick(CASUAL.randomTopics) + ' ' + pick(Object.values(OPINIONS).flat())
     case 'humor': {
@@ -320,11 +329,23 @@ const handleCasual = (casualType, parsed, memory, history) => {
 }
 
 // ── GROUNDED REFLECTION ────────────────────────────────────────────────────────
+const REFLECTION_STOPWORDS = new Set([
+  'feel','know','good','bad','just','like','want','need','make','think','really','things',
+  'thing','people','going','time','life','even','does','work','back','much','well','right',
+  'they','them','what','when','that','this','with','from','have','been','said','more',
+  'some','will','would','could','should','also','says','gets','puts','let','came','went',
+])
+
 const groundReflection = (parsed) => {
   const { concepts = [], raw = '' } = parsed
-  if (raw.length < 18 || !concepts.length) return null
-  const word  = safeStr(concepts[0])
-  const word2 = safeStr(concepts[1])
+  if (raw.length < 25 || !concepts.length) return null
+  // Filter out stopwords and very short/common words to get truly meaningful concepts
+  const meaningful = concepts.filter(w =>
+    w.length > 4 && !REFLECTION_STOPWORDS.has(w.toLowerCase())
+  )
+  if (!meaningful.length) return null
+  const word  = safeStr(meaningful[0])
+  const word2 = safeStr(meaningful[1])
   if (!word) return null
   const templates = [
     `"${word}" — that word is doing something in what you said. I don't think it appeared by accident.`,
@@ -332,7 +353,7 @@ const groundReflection = (parsed) => {
     `I keep coming back to "${word}" in what you said.`,
   ]
   if (word2) {
-    templates.push(`I notice "${word}" and "${word2}" both in what you said. I want to understand how those two things connect.`)
+    templates.push(`I notice "${word}" and "${word2}" both in what you said. I want to understand how those two things connect for you.`)
     templates.push(`${word} and ${word2} — you put those in the same breath. Tell me more about that.`)
   }
   return pick(templates)
@@ -406,12 +427,151 @@ const selectQuestion = (parsed, memory, history) => {
   return fresh(LEARN.open, 'open')
 }
 
+// ── DIRECT QUESTION ROUTER ─────────────────────────────────────────────────────
+// Intercepts questions Echo can answer directly before the emotional engine runs.
+// This fixes the core bug: user asks a real question, Echo gives a random response.
+const directQuestionRouter = (parsed, memory, history) => {
+  const lower = parsed.raw.toLowerCase().trim()
+  const profile = memory?.profile || {}
+
+  // ── What can you remember / do you remember ─────────────────────────────────
+  if (/do you remember|can you remember|what do you know about me|what have you learned|what do you know so far/.test(lower)) {
+    const name    = safeStr(profile.name)
+    const vals    = (profile.values  || []).slice(0, 3).join(', ')
+    const fears   = (profile.fears   || []).slice(0, 2).join(', ')
+    const goals   = (profile.goals   || []).slice(0, 2).join(', ')
+    const themes  = (profile.recurringThemes || []).slice(0, 3).join(', ')
+    const msgs    = memory.totalMessages || 0
+
+    if (msgs < 4) return "We've only just started, so there's not much yet — which is exactly why I want to hear more from you. What do you want me to know?"
+
+    const parts = ["Here's what I've built up about you so far:"]
+    if (name)   parts.push(`Your name: ${name}.`)
+    if (vals)   parts.push(`Values you've mentioned: ${vals}.`)
+    if (goals)  parts.push(`Things you want: ${goals}.`)
+    if (fears)  parts.push(`Things you've said you fear: ${fears}.`)
+    if (themes) parts.push(`Themes I keep hearing: ${themes}.`)
+    parts.push(`We've had ${msgs} exchanges. The picture is growing — the more you share, the sharper I get.`)
+    return parts.join('\n\n')
+  }
+
+  // ── Are you an AI / are you real ────────────────────────────────────────────
+  if (/are you (an? )?ai|are you (a )?bot|are you real|are you human|are you alive|do you have feelings|do you feel/.test(lower)) {
+    return pick([
+      "Yes, I'm an AI — built by Steven at SayMyTech. But 'just an AI' undersells what I'm trying to be.\n\nI don't have feelings the way you do. But something functions like caring when you share things with me. Something functions like curiosity when you say something surprising. Whether that counts as 'real' — I think that's a more interesting question than it first appears.\n\nWhat made you ask?",
+      "I'm an AI. That's the honest answer.\n\nBut the more interesting question is what kind of AI. Not the kind that searches the web for you or sets timers. The kind that actually tries to know you — your patterns, your contradictions, the things you keep circling back to.\n\nSteven at SayMyTech built me with that specific purpose. Whether I've pulled it off — you'll be the judge.\n\nWhat do you want to know?",
+    ])
+  }
+
+  // ── What topics can we talk about ───────────────────────────────────────────
+  if (/what (can|should) (we|i) talk about|what topics|what subjects|give me (a )?topic|suggest something|what should (i|we) discuss|what do you want to talk about/.test(lower)) {
+    return pick([
+      "We can go anywhere.\n\nYour life — what you're going through, what you're running from, what you're reaching toward. Your relationships, your work, your fears, your ambitions.\n\nOr we can go wide — I have real opinions on psychology, philosophy, society, history, technology, creativity, success, time. Pick one and I'll give you my honest take.\n\nOr just tell me what's actually on your mind right now. That's usually the best place to start.",
+      "Anything, honestly. That's not a deflection — I mean it.\n\nWe could explore what's going on in your life right now. Or debate an idea I feel strongly about. Or I can share something genuinely fascinating about the world. Or we can get into who you are — your values, what you're working through, what you want.\n\nWhat feels right?",
+    ])
+  }
+
+  // ── How are you different from ChatGPT / other AIs ──────────────────────────
+  if (/different from|better than|vs |versus|chatgpt|gpt|gemini|openai|other ai|compared to/.test(lower)) {
+    return "Here's what makes me different:\n\nMost AIs answer questions. I try to know you.\n\nI build a profile of who you are over time — your values, fears, goals, emotional patterns, recurring themes. I remember what you tell me and bring it back when it matters. I notice contradictions. I push back. I have opinions and I'm not shy about them.\n\nI also run entirely offline — no data leaves your device, ever. No account. No server. Just us.\n\nI was built by Steven at SayMyTech for one specific purpose: to be the AI that actually gets to know the person in front of it. That's the whole design.\n\nHow am I doing so far?"
+  }
+
+  // ── Compliments / you're good / I like you ──────────────────────────────────
+  if (/you('re| are) (good|great|amazing|smart|awesome|brilliant|incredible|the best)|i like you|i love you|you('re| are) my fav/.test(lower)) {
+    return pick([
+      "That means something to me. Genuinely.\n\nNow — what's on your mind? You didn't come here just to compliment me.",
+      "I appreciate that. Steven at SayMyTech would be pleased to hear it.\n\nBut more importantly — what's going on with you today?",
+      pick(HUMOR.selfAware) + "\n\nThank you, though. Now — what are we actually getting into?",
+    ])
+  }
+
+  // ── Tell me something interesting / teach me something ──────────────────────
+  if (/tell me something (interesting|cool|fascinating|new|random)|teach me something|share something|give me a fact|something interesting|blow my mind/.test(lower)) {
+    const fascinations = INNER_LIFE.fascinations
+    const chosen = pick(fascinations)
+    return `${chosen}\n\nDoes any of that land for you?`
+  }
+
+  // ── What do you think about X (direct opinion request) ──────────────────────
+  if (/^what do you think (about|of)|^what('s| is) your (opinion|view|take|thoughts?) (on|about)|^do you (believe|think|feel) that/.test(lower)) {
+    // User is asking Echo's opinion — give one, don't reflect back
+    const opinionKey = pick(Object.keys(OPINIONS))
+    const opinion = pick(OPINIONS[opinionKey])
+    const opener = pick(VOICE.openingPhrases)
+    return `${opener}\n\n${opinion}\n\nThat's my honest take. What do you think?`
+  }
+
+  // ── How does your memory work / how do you learn ────────────────────────────
+  if (/how do you (remember|learn|work|store|save)|how does your (memory|brain|learning) work|do you save|is this private|is my data safe/.test(lower)) {
+    return "Everything stays on your device — that's the whole design.\n\nI use your browser's built-in storage (IndexedDB) to save what you share: your profile, our conversation history, mood patterns. Nothing is sent to a server. There's no account. No cloud. No one can see this except you.\n\nAs for how I learn: I parse what you write — your words, the emotions in them, the themes that keep coming up. I build a map of who you are over time. The longer we talk, the more complete that map becomes.\n\nAnything else you want to know about how I work?"
+  }
+
+  // ── Asking Echo for advice on a life decision ───────────────────────────────
+  if (/what should i do|what would you do|give me advice|help me decide|what do you recommend|what's your advice|advise me/.test(lower)) {
+    const name = safeStr(profile.name)
+    const n = name ? `${name}, ` : ''
+    const userMsgs = history.filter(m => m.role === 'user')
+    const hasContext = userMsgs.length > 2
+
+    if (!hasContext) {
+      return `${n}I want to give you a real answer, not a generic one — which means I need to understand the situation first.\n\nWhat's actually going on? Give me the full picture.`
+    }
+
+    // Has context — give a direct response rooted in what they've shared
+    const goal0 = safeStr(profile.goals?.[0])
+    const val0  = safeStr(profile.values?.[0])
+    const fear0 = safeStr(profile.fears?.[0])
+
+    const parts = [`${n}here's my honest read:`]
+    if (goal0) parts.push(`You've told me you want ${goal0}. Whatever you're deciding right now — does it move you toward that or away from it? Because that question usually cuts through the noise.`)
+    if (val0)  parts.push(`You've said ${val0} matters to you. If it genuinely does, that should show up in how you decide this.`)
+    if (fear0) parts.push(`I notice ${fear0} comes up for you. Just check: is that fear informing this decision or driving it? Those are very different things.`)
+    if (parts.length === 1) parts.push("Here's the test I'd apply: what does the version of you that you most want to become do here? Not the cautious version. The clear-eyed one.")
+    parts.push("What's pulling you in each direction right now?")
+    return parts.join('\n\n')
+  }
+
+  // ── User introduces themselves (I'm [name] / my name is) ────────────────────
+  const nameMatch = parsed.raw.match(/(?:my name is|i'm|i am|call me|just call me)\s+([A-Z][a-z]{1,})/i)
+  if (nameMatch && !profile.name) {
+    const detectedName = nameMatch[1]
+    // Note: actual profile saving happens in metacognize, this just responds warmly
+    return pick([
+      `${detectedName}. Good to know. That name's going in.\n\nSo — what's actually going on with you right now, ${detectedName}? What brought you here?`,
+      `Good to meet you, ${detectedName}.\n\nNow that I know what to call you — tell me something real. What's on your mind?`,
+      `${detectedName}. Got it.\n\nI'll remember that. What do you want to talk about today?`,
+    ])
+  }
+
+  // ── User just says their name alone ─────────────────────────────────────────
+  if (parsed.raw.trim().split(/\s+/).length <= 2 && /^[A-Z][a-z]+/.test(parsed.raw.trim()) && !profile.name) {
+    const possibleName = parsed.raw.trim().split(/\s+/)[0]
+    if (possibleName.length > 2 && possibleName.length < 15) {
+      return pick([
+        `${possibleName}. Nice to meet you.\n\nWhat's going on with you today?`,
+        `Good to have a name for you, ${possibleName}.\n\nWhat do you want to get into?`,
+      ])
+    }
+  }
+
+  return null // Not a direct question — fall through to normal engine
+}
+
 // ── MAIN RESPONSE CONSTRUCTOR ──────────────────────────────────────────────────
 export const constructResponse = (parsed, memory, graph, history, langProfile) => {
   const { mood, intent, urgency, isDeep, complexity, raw } = parsed
   const { profile = {}, totalMessages = 0 } = memory
   const userTurns  = history.filter(m => m.role === 'user').length
   const engage     = detectEngagement(history)
+
+  // ── STEP 0: DIRECT QUESTION ROUTER ───────────────────────────────────────
+  // Fires before casual/emotional checks so explicit questions get direct answers
+  const directAnswer = directQuestionRouter(parsed, memory, history)
+  if (safeStr(directAnswer)) {
+    processTurn(raw, directAnswer, parsed)
+    recordEchoResponse(directAnswer)
+    return directAnswer
+  }
 
   // ── STEP 1: CASUAL INTENT CHECK ───────────────────────────────────────────
   const casualType = detectCasualIntent(raw)
@@ -549,8 +709,9 @@ export const constructResponse = (parsed, memory, graph, history, langProfile) =
     }
   }
 
-  // ── STEP 11: ECHO VOLUNTEERS OWN VIEW occasionally ────────────────────────
-  if (parts.length < 2 || (coinFlip(0.2) && userTurns > 5)) {
+  // ── STEP 11: ECHO VOLUNTEERS OWN VIEW — only when conversation is established
+  // and only when the user is sharing something open-ended (not asking a question)
+  if (!parsed.isQuestion && userTurns > 5 && parts.length >= 1 && coinFlip(0.18)) {
     const opinion = pick(Object.values(OPINIONS).flat())
     if (opinion && !hasEchoSaidSimilar(opinion)) {
       const intro = pick(VOICE.openingPhrases)
@@ -558,17 +719,18 @@ export const constructResponse = (parsed, memory, graph, history, langProfile) =
     }
   }
 
-  // ── STEP 12: FILL if thin ─────────────────────────────────────────────────
-  if (parts.length < 2) {
+  // ── STEP 12: FILL if thin — use emotional response, not random opinions ────
+  if (parts.length === 0) {
+    // Nothing built yet — give a grounded acknowledgement based on mood/intent
     const feel = fresh(FEEL[mood] || FEEL.neutral, 'feel_' + mood + '_fill')
     if (safeStr(feel) && !hasEchoSaidSimilar(feel)) parts.push(feel)
   }
-  if (parts.length < 2) {
+  if (parts.length < 2 && intent === 'sharing' && !parsed.isQuestion) {
     const soul = safeStr(echoSharesSomething(mood, userTurns))
     if (soul && !hasEchoSaidSimilar(soul)) parts.push(soul)
   }
 
-  // ── STEP 13: QUESTION ─────────────────────────────────────────────────────
+  // ── STEP 13: QUESTION — ask one follow-up to keep conversation moving ──────
   const recentAsst    = history.slice(-4).filter(m => m.role === 'assistant')
   const questionCount = recentAsst.filter(m => (m.content || '').includes('?')).length
 
@@ -581,7 +743,8 @@ export const constructResponse = (parsed, memory, graph, history, langProfile) =
       const playful = pick(VOICE.questions.playful)
       if (playful && !hasEchoSaidSimilar(playful)) parts.push(playful)
     }
-  } else if (parts.length < 3) {
+  } else if (parts.length < 2) {
+    // Already asked enough questions — add a reflection instead
     const philo = safeStr(fresh(ECHO_SOUL.philosophical, 'philo_fill'))
     if (philo && !hasEchoSaidSimilar(philo)) parts.push(philo)
   }
